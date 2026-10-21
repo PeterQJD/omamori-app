@@ -1,0 +1,686 @@
+'use strict';
+
+// Common omamori purposes: [Japanese, English]. The form also allows free text.
+const PURPOSES = [
+  ['交通安全', 'Traffic safety'],
+  ['学業成就', 'Academic success'],
+  ['合格祈願', 'Passing exams'],
+  ['縁結び', 'Matchmaking / good relationships'],
+  ['恋愛成就', 'Success in love'],
+  ['家内安全', 'Safety of the household'],
+  ['健康祈願', 'Good health'],
+  ['病気平癒', 'Recovery from illness'],
+  ['厄除け', 'Warding off misfortune'],
+  ['八方除け', 'Protection from all directions'],
+  ['開運', 'Good luck'],
+  ['商売繁盛', 'Business prosperity'],
+  ['金運', 'Wealth'],
+  ['仕事運', 'Success at work'],
+  ['安産', 'Safe childbirth'],
+  ['子宝', 'Blessing of children'],
+  ['旅行安全', 'Safe travel'],
+  ['必勝', 'Victory'],
+  ['芸能上達', 'Progress in the arts'],
+  ['心願成就', 'Wishes come true'],
+];
+
+const view = document.getElementById('view');
+let routeId = 0;        // goes up on every screen change, so slow screens can tell they're out of date
+let objectUrls = [];    // photo URLs for the current screen, released when leaving it
+let formDirty = false;  // true while the add/edit form has unsaved changes
+let listSearch = '';    // remembered so the search survives opening an entry and coming back
+
+// ---------- Small helpers ----------
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function blobUrl(blob) {
+  const url = URL.createObjectURL(blob);
+  objectUrls.push(url);
+  return url;
+}
+
+function storedUrl(stored) {
+  return blobUrl(Images.toBlob(stored));
+}
+
+function setHeader(title, left = '', right = '') {
+  document.getElementById('title').textContent = title;
+  document.getElementById('topbar-left').innerHTML = left;
+  document.getElementById('topbar-right').innerHTML = right;
+}
+
+function toast(message) {
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.hidden = false;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { el.hidden = true; }, 2500);
+}
+
+function newId() {
+  if (window.crypto?.randomUUID) return crypto.randomUUID();
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+function purposeLabel(purpose) {
+  const preset = PURPOSES.find(([ja]) => ja === purpose);
+  return preset ? `${preset[0]} · ${preset[1]}` : purpose;
+}
+
+function formatDate(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+function displayName(rec) {
+  return rec.nameJa || rec.nameEn || 'Untitled omamori';
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+  return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+// Asks the browser not to clear our storage when the device is low on space.
+function requestPersistence() {
+  navigator.storage?.persist?.().catch(() => {});
+}
+
+function getLastBackup() {
+  try { return localStorage.getItem('lastBackupAt'); } catch { return null; }
+}
+
+function setLastBackup() {
+  try { localStorage.setItem('lastBackupAt', new Date().toISOString()); } catch { /* not important */ }
+}
+
+// ---------- Pasting text (from iOS Live Text) ----------
+
+// Live Text often adds line breaks, and spaces between Japanese characters.
+// Single-line fields get everything joined onto one line; notes keep their lines.
+const CJK = '\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}ー々〆〇';
+const CJK_GAP = new RegExp(`([${CJK}])\\s+(?=[${CJK}])`, 'gu');
+
+function tidyText(text, multiline) {
+  const t = text.replace(/\r\n?/g, '\n');
+  if (!multiline) return t.replace(/\s+/g, ' ').replace(CJK_GAP, '$1').trim();
+  return t.split('\n')
+    .map(line => line.replace(/[ \t　]+/g, ' ').replace(CJK_GAP, '$1').trim())
+    .join('\n')
+    .trim();
+}
+
+function insertText(el, text) {
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? el.value.length;
+  el.setRangeText(text, start, end, 'end');
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+async function pasteInto(el) {
+  if (!navigator.clipboard?.readText) {
+    alert('Tap and hold inside the box, then choose Paste.');
+    return;
+  }
+  try {
+    const text = await navigator.clipboard.readText();
+    if (!text) { toast('Nothing to paste'); return; }
+    insertText(el, tidyText(text, el.tagName === 'TEXTAREA'));
+  } catch {
+    alert('Could not paste. Tap and hold inside the box, then choose Paste.');
+  }
+}
+
+// ---------- Screens ----------
+
+async function route() {
+  const id = ++routeId;
+  objectUrls.forEach(url => URL.revokeObjectURL(url));
+  objectUrls = [];
+  formDirty = false;
+  window.scrollTo(0, 0);
+
+  const [page, param] = location.hash.replace(/^#\/?/, '').split('/');
+  try {
+    if (page === 'add') await showForm(null);
+    else if (page === 'edit') await showForm(param);
+    else if (page === 'item') await showDetail(param);
+    else if (page === 'backup') await showBackup();
+    else await showList();
+  } catch (err) {
+    console.error(err);
+    if (id !== routeId) return;
+    setHeader('Omamori', '<a class="hbtn" href="#/">‹ All</a>');
+    view.innerHTML = `<p class="message">Something went wrong: ${esc(err.message)}</p>`;
+  }
+}
+
+function showNotFound() {
+  setHeader('Not found', '<a class="hbtn" href="#/">‹ All</a>');
+  view.innerHTML = '<p class="message">This omamori could not be found. It may have been deleted.</p>';
+}
+
+// --- List ---
+
+async function showList() {
+  const myRoute = routeId;
+  setHeader('Omamori',
+    '<a class="hbtn" href="#/backup">Backup</a>',
+    '<a class="hbtn strong" href="#/add">+ Add</a>');
+
+  const records = await DB.allRecords();
+  if (myRoute !== routeId) return;
+
+  // Newest acquired first; entries without a date go by when they were added.
+  records.sort((a, b) => (b.dateAcquired || b.createdAt || '').localeCompare(a.dateAcquired || a.createdAt || ''));
+
+  const thumbs = new Map(records.filter(r => r.thumb).map(r => [r.id, storedUrl(r.thumb)]));
+
+  view.innerHTML = `
+    ${records.length ? `<input type="search" id="search" class="search" placeholder="Search ${records.length} omamori" autocomplete="off" lang="ja">` : ''}
+    <div id="grid" class="grid"></div>
+    <p class="version">Omamori Collection · version ${esc(APP_VERSION)}</p>`;
+
+  const grid = document.getElementById('grid');
+  const search = document.getElementById('search');
+
+  function render() {
+    const q = listSearch.trim().toLowerCase();
+    const shown = q
+      ? records.filter(r => [r.nameJa, r.nameEn, r.location, r.purpose, purposeLabel(r.purpose || ''), r.notes]
+          .some(v => (v || '').toLowerCase().includes(q)))
+      : records;
+
+    if (!records.length) {
+      grid.innerHTML = '<p class="message">No omamori yet.<br>Tap <strong>+ Add</strong> to record your first one.</p>';
+      return;
+    }
+    if (!shown.length) {
+      grid.innerHTML = '<p class="message">Nothing matches your search.</p>';
+      return;
+    }
+    grid.innerHTML = shown.map(r => `
+      <a class="card" href="#/item/${esc(r.id)}">
+        <div class="thumb">${thumbs.has(r.id) ? `<img src="${thumbs.get(r.id)}" alt="">` : '<span class="nophoto" lang="ja">守</span>'}</div>
+        <div class="card-body" lang="ja">
+          <div class="name-ja">${esc(r.nameJa || r.nameEn || 'Untitled')}</div>
+          ${r.nameJa && r.nameEn ? `<div class="name-en">${esc(r.nameEn)}</div>` : ''}
+          <div class="meta">${esc([r.purpose, formatDate(r.dateAcquired)].filter(Boolean).join(' · '))}</div>
+        </div>
+      </a>`).join('');
+  }
+
+  if (search) {
+    search.value = listSearch;
+    search.addEventListener('input', () => { listSearch = search.value; render(); });
+  }
+  render();
+}
+
+// --- Detail ---
+
+async function showDetail(id) {
+  const myRoute = routeId;
+  const rec = await DB.getRecord(id);
+  if (myRoute !== routeId) return;
+  if (!rec) return showNotFound();
+
+  const [front, back] = await Promise.all([DB.getPhoto(id, 'front'), DB.getPhoto(id, 'back')]);
+  if (myRoute !== routeId) return;
+
+  setHeader(displayName(rec),
+    '<a class="hbtn" href="#/">‹ All</a>',
+    `<a class="hbtn strong" href="#/edit/${esc(id)}">Edit</a>`);
+
+  const figure = (photo, label) => photo
+    ? `<figure class="photo"><img src="${storedUrl(photo)}" alt="${label}"><figcaption>${label}</figcaption></figure>`
+    : `<figure class="photo empty"><span>No ${label.toLowerCase()} photo</span></figure>`;
+
+  const rows = [
+    ['Location', rec.location],
+    ['Purpose', rec.purpose && purposeLabel(rec.purpose)],
+    ['Date acquired', formatDate(rec.dateAcquired)],
+    ['Notes', rec.notes],
+  ].filter(([, value]) => value);
+
+  view.innerHTML = `
+    <div class="photos">${figure(front, 'Front')}${figure(back, 'Back')}</div>
+    <div class="detail" lang="ja">
+      <h2>${esc(displayName(rec))}</h2>
+      ${rec.nameJa && rec.nameEn ? `<p class="subtitle">${esc(rec.nameEn)}</p>` : ''}
+      <dl>${rows.map(([label, value]) => `<dt lang="en">${label}</dt><dd>${esc(value)}</dd>`).join('')}</dl>
+    </div>
+    <button type="button" class="button danger" id="delete">Delete this omamori</button>`;
+
+  view.querySelectorAll('.photo img').forEach(img => img.addEventListener('click', () => openViewer(img.src)));
+
+  document.getElementById('delete').addEventListener('click', async () => {
+    if (!confirm(`Delete “${displayName(rec)}”?\n\nThis can’t be undone (unless you have a backup).`)) return;
+    await DB.remove(id);
+    toast('Deleted');
+    location.replace('#/');
+  });
+}
+
+function openViewer(src) {
+  const viewer = document.getElementById('viewer');
+  viewer.querySelector('img').src = src;
+  viewer.hidden = false;
+}
+
+document.getElementById('viewer').addEventListener('click', e => { e.currentTarget.hidden = true; });
+
+// --- Add / edit form ---
+
+function textField(id, label, { multiline = false, placeholder = '' } = {}) {
+  const attrs = `id="${id}" lang="ja" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="${esc(placeholder)}"`;
+  return `
+    <div class="field">
+      <div class="label-row">
+        <label for="${id}">${label}</label>
+        <span class="tools">
+          <button type="button" class="mini" data-paste="${id}">Paste</button>
+          <button type="button" class="mini" data-clear="${id}" aria-label="Clear ${label}">Clear</button>
+        </span>
+      </div>
+      ${multiline ? `<textarea ${attrs} rows="5"></textarea>` : `<input type="text" ${attrs}>`}
+    </div>`;
+}
+
+async function showForm(id) {
+  const myRoute = routeId;
+  const editing = Boolean(id);
+  const rec = editing ? await DB.getRecord(id) : null;
+  if (myRoute !== routeId) return;
+  if (editing && !rec) return showNotFound();
+
+  // For each side: the current photo (a Blob, or null) and whether it was changed.
+  const photos = { front: { blob: null, changed: false }, back: { blob: null, changed: false } };
+  if (editing) {
+    const [front, back] = await Promise.all([DB.getPhoto(id, 'front'), DB.getPhoto(id, 'back')]);
+    if (myRoute !== routeId) return;
+    photos.front.blob = front && Images.toBlob(front);
+    photos.back.blob = back && Images.toBlob(back);
+  }
+
+  setHeader(editing ? 'Edit' : 'New omamori',
+    '<button type="button" class="hbtn" id="cancel">Cancel</button>',
+    '<button type="button" class="hbtn strong" id="save-top">Save</button>');
+
+  view.innerHTML = `
+    <form id="form" class="form" novalidate>
+      <div class="pickers">
+        ${['front', 'back'].map(side => `
+          <div class="picker" data-side="${side}">
+            <label class="picker-box">
+              <img alt="" hidden>
+              <span class="picker-hint">+ ${side === 'front' ? 'Front' : 'Back'} photo</span>
+              <input type="file" accept="image/*" class="visually-hidden">
+            </label>
+            <button type="button" class="linkbtn" data-remove hidden>Remove ${side} photo</button>
+          </div>`).join('')}
+      </div>
+
+      ${textField('nameJa', 'Shrine name (Japanese)', { placeholder: '例: 伏見稲荷大社' })}
+      ${textField('nameEn', 'Shrine name (English / romanised)', { placeholder: 'e.g. Fushimi Inari Taisha' })}
+      ${textField('location', 'Location', { placeholder: 'e.g. Fushimi-ku, Kyoto' })}
+
+      <div class="field">
+        <div class="label-row"><label for="purposeSelect">Purpose</label></div>
+        <select id="purposeSelect">
+          <option value="">— Not set —</option>
+          ${PURPOSES.map(([ja, en]) => `<option value="${ja}">${ja} · ${en}</option>`).join('')}
+          <option value="__other">Other (type your own)…</option>
+        </select>
+      </div>
+      <div id="purposeOtherField" hidden>
+        ${textField('purposeOther', 'Purpose (your own words)', { placeholder: 'e.g. 諸願成就' })}
+      </div>
+
+      <div class="field">
+        <div class="label-row">
+          <label for="dateAcquired">Date acquired</label>
+          <span class="tools"><button type="button" class="mini" data-clear="dateAcquired">Clear</button></span>
+        </div>
+        <input type="date" id="dateAcquired">
+      </div>
+
+      ${textField('notes', 'Notes', { multiline: true })}
+
+      <button type="submit" class="button primary" id="save">Save</button>
+    </form>`;
+
+  const form = document.getElementById('form');
+  const field = name => document.getElementById(name);
+  const purposeSelect = field('purposeSelect');
+  const purposeOtherField = field('purposeOtherField');
+
+  // Fill in the existing values
+  if (rec) {
+    for (const name of ['nameJa', 'nameEn', 'location', 'dateAcquired', 'notes']) field(name).value = rec[name] || '';
+    if (rec.purpose && PURPOSES.some(([ja]) => ja === rec.purpose)) {
+      purposeSelect.value = rec.purpose;
+    } else if (rec.purpose) {
+      purposeSelect.value = '__other';
+      field('purposeOther').value = rec.purpose;
+    }
+  }
+  purposeOtherField.hidden = purposeSelect.value !== '__other';
+  purposeSelect.addEventListener('change', () => {
+    purposeOtherField.hidden = purposeSelect.value !== '__other';
+  });
+
+  form.addEventListener('input', () => { formDirty = true; });
+  form.addEventListener('change', () => { formDirty = true; });
+
+  // Paste / Clear buttons, and tidying of anything pasted
+  form.querySelectorAll('[data-paste]').forEach(btn => {
+    btn.addEventListener('click', () => pasteInto(field(btn.dataset.paste)));
+  });
+  form.querySelectorAll('[data-clear]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const el = field(btn.dataset.clear);
+      if (el.tagName === 'TEXTAREA' && el.value.length > 40 && !confirm('Clear all the notes?')) return;
+      el.value = '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  });
+  form.querySelectorAll('input[type=text], textarea').forEach(el => {
+    el.addEventListener('paste', e => {
+      const text = e.clipboardData?.getData('text/plain');
+      if (!text) return;
+      e.preventDefault();
+      insertText(el, tidyText(text, el.tagName === 'TEXTAREA'));
+    });
+  });
+
+  // Photo pickers
+  form.querySelectorAll('.picker').forEach(picker => {
+    const side = picker.dataset.side;
+    const state = photos[side];
+    const img = picker.querySelector('img');
+    const hint = picker.querySelector('.picker-hint');
+    const input = picker.querySelector('input[type=file]');
+    const removeBtn = picker.querySelector('[data-remove]');
+    const defaultHint = hint.textContent;
+
+    const showPhoto = () => {
+      img.hidden = !state.blob;
+      hint.hidden = Boolean(state.blob);
+      removeBtn.hidden = !state.blob;
+      if (state.blob) img.src = blobUrl(state.blob);
+    };
+
+    input.addEventListener('change', async () => {
+      const file = input.files[0];
+      input.value = '';
+      if (!file) return;
+      hint.textContent = 'Processing…';
+      try {
+        state.blob = await Images.compress(file, 1600, 0.82);
+        state.changed = true;
+        formDirty = true;
+      } catch {
+        alert('Could not read that photo. Please try another one.');
+      }
+      hint.textContent = defaultHint;
+      showPhoto();
+    });
+
+    removeBtn.addEventListener('click', () => {
+      state.blob = null;
+      state.changed = true;
+      formDirty = true;
+      showPhoto();
+    });
+
+    showPhoto();
+  });
+
+  field('cancel').addEventListener('click', () => {
+    if (formDirty && !confirm('Discard your changes?')) return;
+    formDirty = false;
+    location.replace(editing ? '#/item/' + id : '#/');
+  });
+  field('save-top').addEventListener('click', () => field('save').click());
+
+  let saving = false;
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (saving) return;
+
+    const data = {
+      nameJa: field('nameJa').value.trim(),
+      nameEn: field('nameEn').value.trim(),
+      location: field('location').value.trim(),
+      purpose: purposeSelect.value === '__other' ? field('purposeOther').value.trim() : purposeSelect.value,
+      dateAcquired: field('dateAcquired').value,
+      notes: field('notes').value.trim(),
+    };
+    if (!data.nameJa && !data.nameEn && !photos.front.blob && !photos.back.blob) {
+      alert('Please add at least a shrine name or a photo.');
+      return;
+    }
+
+    saving = true;
+    const saveBtn = field('save');
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving…';
+    try {
+      const now = new Date().toISOString();
+      const record = {
+        ...(rec || {}),
+        ...data,
+        id: rec ? rec.id : newId(),
+        createdAt: rec ? rec.createdAt : now,
+        updatedAt: now,
+      };
+
+      const photoChanges = {};
+      for (const side of ['front', 'back']) {
+        if (photos[side].changed) photoChanges[side] = photos[side].blob ? await Images.toStored(photos[side].blob) : null;
+      }
+      // The list thumbnail comes from the front photo, or the back if there's no front.
+      if (!rec || photos.front.changed || photos.back.changed) {
+        const source = photos.front.blob || photos.back.blob;
+        record.thumb = source ? await Images.toStored(await Images.compress(source, 400, 0.75)) : null;
+      }
+
+      await DB.save(record, photoChanges);
+      requestPersistence();
+      formDirty = false;
+      toast('Saved');
+      location.replace('#/item/' + record.id);
+    } catch (err) {
+      console.error(err);
+      alert('Could not save: ' + err.message);
+      saving = false;
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save';
+    }
+  });
+}
+
+// --- Backup / import ---
+
+const BACKUP_APP = 'omamori-collection';
+
+async function buildBackup() {
+  const records = await DB.allRecords();
+  // Built from parts so we never hold one enormous string in memory.
+  const parts = [`{"app":"${BACKUP_APP}","format":1,"appVersion":${JSON.stringify(APP_VERSION)},"exportedAt":"${new Date().toISOString()}","records":[`];
+  for (const [i, rec] of records.entries()) {
+    const [front, back] = await Promise.all([DB.getPhoto(rec.id, 'front'), DB.getPhoto(rec.id, 'back')]);
+    const entry = {
+      ...rec,
+      thumb: rec.thumb ? await Images.toDataURL(rec.thumb) : null,
+      photos: {
+        front: front ? await Images.toDataURL(front) : null,
+        back: back ? await Images.toDataURL(back) : null,
+      },
+    };
+    parts.push((i ? ',' : '') + JSON.stringify(entry));
+  }
+  parts.push(']}');
+  return { blob: new Blob(parts, { type: 'application/json' }), count: records.length };
+}
+
+function downloadFile(file) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file);
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+
+async function showBackup() {
+  const myRoute = routeId;
+  setHeader('Backup', '<a class="hbtn" href="#/">‹ All</a>');
+
+  const records = await DB.allRecords();
+  const estimate = await navigator.storage?.estimate?.().catch(() => null);
+  if (myRoute !== routeId) return;
+
+  const last = getLastBackup();
+  view.innerHTML = `
+    <section class="panel">
+      <h2>Export a backup</h2>
+      <p>Saves all ${records.length} omamori, including photos, into one file.
+         Keep it somewhere safe, such as iCloud Drive in the Files app.</p>
+      <p class="muted">Last backup: ${last ? esc(new Date(last).toLocaleString()) : 'never'}</p>
+      <button type="button" class="button primary" id="prepare">Prepare backup file</button>
+      <div id="ready" hidden>
+        <p id="readyInfo"></p>
+        <button type="button" class="button primary" id="share">Save backup file…</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Import a backup</h2>
+      <p>Adds the omamori from a backup file. Entries that are already here are replaced by the
+         version in the file; everything else is kept.</p>
+      <label class="button">Choose backup file…<input type="file" id="importFile" class="visually-hidden"></label>
+      <p id="importStatus" class="muted" aria-live="polite"></p>
+    </section>
+
+    <section class="panel">
+      <h2>About</h2>
+      <p>Version <strong>${esc(APP_VERSION)}</strong></p>
+      ${estimate?.usage != null ? `<p>Storage used: ${formatBytes(estimate.usage)}</p>` : ''}
+      <p class="muted">Your collection is stored only on this device, inside this app.
+         Removing the app from the Home Screen deletes it, so export a backup regularly.</p>
+    </section>`;
+
+  // Exporting happens in two taps: iOS only allows the Share sheet to open
+  // straight after a tap, and preparing a large backup can take a few seconds.
+  let backupFile = null;
+  const prepareBtn = document.getElementById('prepare');
+  prepareBtn.addEventListener('click', async () => {
+    prepareBtn.disabled = true;
+    prepareBtn.textContent = 'Preparing…';
+    try {
+      const { blob, count } = await buildBackup();
+      const name = `omamori-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      backupFile = new File([blob], name, { type: 'application/json' });
+      document.getElementById('readyInfo').textContent = `Ready: ${count} omamori, ${formatBytes(blob.size)}.`;
+      document.getElementById('ready').hidden = false;
+      prepareBtn.hidden = true;
+    } catch (err) {
+      console.error(err);
+      alert('Could not prepare the backup: ' + err.message);
+      prepareBtn.disabled = false;
+      prepareBtn.textContent = 'Prepare backup file';
+    }
+  });
+
+  document.getElementById('share').addEventListener('click', async () => {
+    if (navigator.canShare?.({ files: [backupFile] })) {
+      try {
+        await navigator.share({ files: [backupFile] });
+        setLastBackup();
+        toast('Backup saved');
+      } catch (err) {
+        if (err.name !== 'AbortError') { downloadFile(backupFile); setLastBackup(); }
+      }
+    } else {
+      downloadFile(backupFile);
+      setLastBackup();
+    }
+  });
+
+  const importFile = document.getElementById('importFile');
+  const status = document.getElementById('importStatus');
+  importFile.addEventListener('change', async () => {
+    const file = importFile.files[0];
+    importFile.value = '';
+    if (!file) return;
+
+    status.textContent = 'Reading file…';
+    let backup;
+    try {
+      backup = JSON.parse(await file.text());
+    } catch {
+      backup = null;
+    }
+    if (backup?.app !== BACKUP_APP || !Array.isArray(backup.records)) {
+      status.textContent = 'That file isn’t a backup from this app.';
+      return;
+    }
+
+    const entries = backup.records.filter(r => r && r.id);
+    const existing = new Set((await DB.allRecords()).map(r => r.id));
+    const overlap = entries.filter(r => existing.has(r.id)).length;
+    const question = `Import ${entries.length} omamori from this backup?` +
+      (overlap ? `\n\n${overlap} of them are already here and will be replaced with the backup’s version.` : '');
+    if (!confirm(question)) { status.textContent = ''; return; }
+
+    let done = 0;
+    try {
+      for (const entry of entries) {
+        const { photos = {}, thumb, ...record } = entry;
+        record.thumb = thumb ? Images.fromDataURL(thumb) : null;
+        await DB.save(record, {
+          front: photos.front ? Images.fromDataURL(photos.front) : null,
+          back: photos.back ? Images.fromDataURL(photos.back) : null,
+        });
+        done++;
+        status.textContent = `Imported ${done} of ${entries.length}…`;
+      }
+      requestPersistence();
+      status.textContent = `Done — imported ${done} omamori.`;
+    } catch (err) {
+      console.error(err);
+      status.textContent = `Stopped after ${done} of ${entries.length}: ${err.message}`;
+    }
+  });
+}
+
+// ---------- Start up ----------
+
+window.addEventListener('hashchange', route);
+route();
+
+if ('serviceWorker' in navigator) {
+  let hadController = Boolean(navigator.serviceWorker.controller);
+
+  // A new version has taken over: reload to use it (unless a form is half filled in).
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
+    if (formDirty) toast('A new version is ready. It will load next time you open the app.');
+    else location.reload();
+  });
+
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    // Home Screen apps often resume rather than restart, so check for updates when shown.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update().catch(() => {});
+    });
+  }).catch(err => console.warn('Service worker not registered', err));
+}

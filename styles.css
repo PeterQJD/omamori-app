@@ -1,0 +1,419 @@
+:root {
+  --bg: #f6f1e7;
+  --surface: #fffdf8;
+  --text: #2b2420;
+  --muted: #7a6e64;
+  --line: #e2d9c8;
+  --field: #ffffff;
+  --accent: #b8322a;
+  --accent-text: #ffffff;
+  --danger: #b3261e;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161311;
+    --surface: #221d1a;
+    --text: #f1ebe3;
+    --muted: #a59a8f;
+    --line: #3b332e;
+    --field: #2a2420;
+    --accent: #e0574a;
+    --danger: #f2756b;
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-tap-highlight-color: transparent;
+}
+
+a { color: var(--accent); }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* ---------- Top bar ---------- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: calc(env(safe-area-inset-top) + 4px) max(12px, env(safe-area-inset-right)) 4px max(12px, env(safe-area-inset-left));
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-side { display: flex; }
+.topbar-side.right { justify-content: flex-end; }
+
+.hbtn {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 17px;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.hbtn.strong { font-weight: 600; }
+
+/* ---------- Main area ---------- */
+
+main {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 16px max(16px, env(safe-area-inset-right)) calc(32px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+
+.message {
+  grid-column: 1 / -1;
+  margin: 48px 0;
+  text-align: center;
+  color: var(--muted);
+}
+
+.muted { color: var(--muted); }
+
+.version {
+  margin-top: 32px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ---------- List ---------- */
+
+.search {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+}
+.card:active { opacity: 0.7; }
+
+.thumb {
+  aspect-ratio: 3 / 4;
+  background: var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.nophoto {
+  font-size: 48px;
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.card-body { padding: 8px 10px 10px; }
+.name-ja { font-weight: 600; line-height: 1.3; }
+.name-en, .meta {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+/* ---------- Detail ---------- */
+
+.photos {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.photo {
+  margin: 0;
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--line);
+}
+.photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  cursor: zoom-in;
+}
+.photo figcaption {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 12px;
+}
+.photo.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.detail h2 {
+  margin: 20px 0 0;
+  font-size: 24px;
+}
+.subtitle {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+.detail dl { margin: 20px 0; }
+.detail dt {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 14px;
+}
+.detail dd {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Buttons ---------- */
+
+.button {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+}
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.button.danger {
+  margin-top: 32px;
+  color: var(--danger);
+}
+.button:disabled { opacity: 0.6; }
+
+.mini {
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.linkbtn {
+  display: block;
+  margin: 6px auto 0;
+  min-height: 32px;
+  border: 0;
+  background: none;
+  color: var(--danger);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* ---------- Form ---------- */
+
+input[type=text], input[type=search], input[type=date], select, textarea {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px; /* 16px or more stops iPhone zooming in when typing */
+  -webkit-appearance: none;
+  appearance: none;
+}
+textarea { resize: vertical; }
+select {
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 12px) 50%;
+  background-size: 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 32px;
+}
+input[type=date] { text-align: left; }
+input:focus, select:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.field { margin-top: 18px; }
+
+.label-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.label-row label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.tools {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.pickers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.picker-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 3 / 4;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface);
+  cursor: pointer;
+}
+.picker-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.picker-hint {
+  color: var(--accent);
+  font-weight: 600;
+  text-align: center;
+  padding: 8px;
+}
+
+.form .button.primary { margin-top: 28px; }
+
+/* ---------- Backup ---------- */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.panel h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+.panel p { margin: 8px 0; }
+
+/* ---------- Full-screen photo and toast ---------- */
+
+.viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: #000;
+}
+.viewer img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 60;
+  max-width: calc(100% - 32px);
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(30, 25, 22, 0.92);
+  color: #fff;
+  font-size: 15px;
+  text-align: center;
+}
+
+/* iPad and wider: a little more room for cards and photos */
+@media (min-width: 700px) {
+  .grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+  .photos, .pickers { max-width: 640px; }
+}
