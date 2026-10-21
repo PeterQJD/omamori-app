@@ -24,6 +24,21 @@ const PURPOSES = [
   ['心願成就', 'Wishes come true'],
 ];
 
+// The question for "Ask Claude". The fixed reply layout lets the app read the answer back in later.
+const CLAUDE_QUESTION = `These photos show the front and back of a Japanese omamori (shrine charm). Please read all the writing on it, including any embroidered text, and identify the shrine.
+
+Reply in plain text (no bold, headings or bullet points), starting with exactly these lines:
+
+Shrine (Japanese):
+Shrine (English):
+Location:
+Purpose (Japanese):
+Purpose (English):
+Design:
+Notes:
+
+Shrine (English) is the romanised name, e.g. Fushimi Inari Taisha. Location is the city or ward and prefecture. Purpose (Japanese) is the purpose as written on the omamori, e.g. 交通安全. Design is a short description of the design and how it relates to the protection the omamori offers. Notes is anything else worth recording. If you are guessing, add "(guess)". If you can't tell, leave it blank. You can add more after these lines if you like.`;
+
 const view = document.getElementById('view');
 let routeId = 0;        // goes up on every screen change, so slow screens can tell they're out of date
 let objectUrls = [];    // photo URLs for the current screen, released when leaving it
@@ -79,6 +94,11 @@ function formatDate(iso) {
 
 function displayName(rec) {
   return rec.nameJa || rec.nameEn || 'Untitled omamori';
+}
+
+function photoFile(rec, photo, side) {
+  const name = (rec.nameEn || rec.nameJa || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'omamori';
+  return new File([photo.data], `${name} ${side}.jpg`, { type: photo.type });
 }
 
 function formatBytes(bytes) {
@@ -258,6 +278,10 @@ async function showDetail(id) {
       ${rec.nameJa && rec.nameEn ? `<p class="subtitle">${esc(rec.nameEn)}</p>` : ''}
       <dl>${rows.map(([label, value]) => `<dt lang="en">${label}</dt><dd>${esc(value)}</dd>`).join('')}</dl>
     </div>
+    ${front || back ? `
+      <button type="button" class="button" id="ask-claude">Ask Claude about this omamori</button>
+      <p class="muted help">Copies a question and opens the Share sheet with the photos.
+        Choose <strong>Claude</strong>, paste the question into the message, and send.</p>` : ''}
     <button type="button" class="button danger" id="delete">Delete this omamori</button>`;
 
   view.querySelectorAll('.photo img').forEach(img => img.addEventListener('click', () => Viewer.open(img.src)));
@@ -265,10 +289,23 @@ async function showDetail(id) {
   // Opens the Share sheet, where "Save Image" puts the photo in the Photos library.
   const photos = { front, back };
   view.querySelectorAll('.save-photo').forEach(btn => btn.addEventListener('click', () => {
-    const side = btn.dataset.side;
-    const name = (rec.nameEn || rec.nameJa || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'omamori';
-    shareFile(new File([photos[side].data], `${name} ${side}.jpg`, { type: photos[side].type }));
+    shareFile(photoFile(rec, photos[btn.dataset.side], btn.dataset.side));
   }));
+
+  document.getElementById('ask-claude')?.addEventListener('click', () => {
+    const files = ['front', 'back'].filter(side => photos[side]).map(side => photoFile(rec, photos[side], side));
+    if (!navigator.canShare?.({ files })) {
+      alert('This device can’t share photos from here. Use “Save photo” instead, then add the photos in the Claude app.');
+      return;
+    }
+    // Both start straight away (not one after the other), because iOS only allows them right after a tap.
+    navigator.clipboard?.writeText(CLAUDE_QUESTION).catch(() => {
+      alert('The question couldn’t be copied, so you’ll need to type your own in Claude.');
+    });
+    navigator.share({ files }).catch(err => {
+      if (err.name !== 'AbortError') alert('Could not open the Share sheet: ' + err.message);
+    });
+  });
 
   document.getElementById('delete').addEventListener('click', async () => {
     if (!confirm(`Delete “${displayName(rec)}”?\n\nThis can’t be undone (unless you have a backup).`)) return;

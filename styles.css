@@ -260,6 +260,10 @@ main {
   border-color: var(--accent);
   color: var(--accent-text);
 }
+.help {
+  margin: 8px 4px 0;
+  font-size: 14px;
+}
 .button.danger {
   margin-top: 32px;
   color: var(--danger);
