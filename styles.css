@@ -476,6 +476,18 @@ input:focus, select:focus, textarea:focus {
   font-weight: 600;
   cursor: pointer;
 }
+.viewer-label {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 10px);
+  left: calc(env(safe-area-inset-left) + 12px);
+  margin: 0;
+  padding: 9px 14px;
+  border-radius: 999px;
+  background: rgba(60, 60, 60, 0.75);
+  color: #fff;
+  font-size: 14px;
+  pointer-events: none;
+}
 .viewer-hint {
   position: absolute;
   left: 0;

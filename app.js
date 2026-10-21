@@ -28,19 +28,19 @@ const PURPOSES = [
 ];
 
 // The question for "Ask Claude". The fixed reply layout lets the app read the answer back in later.
-const CLAUDE_QUESTION = `These photos show the front and back of a Japanese omamori (shrine charm). Please read all the writing on it, including any embroidered text, and identify the shrine.
+const CLAUDE_QUESTION = `These photos show the front and back of a Japanese omamori (a charm from a shrine or temple). Please read all the writing on it, including any embroidered text, and identify the shrine or temple.
 
 Reply in plain text (no bold, headings or bullet points), starting with exactly these lines:
 
-Shrine (Japanese):
-Shrine (English):
+Shrine or temple (Japanese):
+Shrine or temple (English):
 Location:
 Purpose (Japanese):
 Purpose (English):
 Design:
 Notes:
 
-Shrine (English) is the romanised name, e.g. Fushimi Inari Taisha. Location is the city or ward and prefecture. Purpose (Japanese) is the purpose as written on the omamori, e.g. 交通安全. Design is a short description of the design and how it relates to the protection the omamori offers. Notes is anything else worth recording. If you are guessing, add "(guess)". If you can't tell, leave it blank. You can add more after these lines if you like.`;
+Shrine or temple (English) is the romanised name, e.g. Fushimi Inari Taisha. Location is the city or ward and prefecture. Purpose (Japanese) is the purpose as written on the omamori, e.g. 交通安全. Design is a short description of the design and how it relates to the protection the omamori offers. Notes is anything else worth recording. If you are guessing, add "(guess)". If you can't tell, leave it blank. You can add more after these lines if you like.`;
 
 const view = document.getElementById('view');
 let routeId = 0;        // goes up on every screen change, so slow screens can tell they're out of date
@@ -291,7 +291,9 @@ async function showDetail(id) {
       <p class="muted help">In the Claude app, press and hold the reply and tap <strong>Copy</strong>, then come back and tap this.</p>` : ''}
     <button type="button" class="button danger" id="delete">Delete this omamori</button>`;
 
-  view.querySelectorAll('.photo img').forEach(img => img.addEventListener('click', () => Viewer.open(img.src)));
+  const photoImgs = [...view.querySelectorAll('.photo img')];
+  const viewerPhotos = photoImgs.map(img => ({ src: img.src, label: img.alt }));
+  photoImgs.forEach((img, i) => img.addEventListener('click', () => Viewer.open(viewerPhotos, i)));
 
   // Opens the Share sheet, where "Save Image" puts the photo in the Photos library.
   const photos = { front, back };
@@ -335,9 +337,12 @@ async function showDetail(id) {
 // --- Fill in from Claude's answer ---
 
 // The labels in Claude's reply (see CLAUDE_QUESTION), lower-case letters only.
+// Replies to the older question say "Shrine" rather than "Shrine or temple".
 const ANSWER_FIELDS = {
   shrinejapanese: 'nameJa',
   shrineenglish: 'nameEn',
+  shrineortemplejapanese: 'nameJa',
+  shrineortempleenglish: 'nameEn',
   location: 'location',
   purposejapanese: 'purposeJa',
   purposeenglish: 'purposeEn',
@@ -375,8 +380,8 @@ function suggestionsFrom(answer, rec) {
   const notes = [answer.design && 'Design: ' + answer.design, answer.notes].filter(Boolean).join('\n\n');
 
   return [
-    { key: 'nameJa', label: 'Shrine name (Japanese)', value: answer.nameJa },
-    { key: 'nameEn', label: 'Shrine name (English)', value: answer.nameEn },
+    { key: 'nameJa', label: 'Shrine or temple (Japanese)', value: answer.nameJa },
+    { key: 'nameEn', label: 'Shrine or temple (English)', value: answer.nameEn },
     { key: 'location', label: 'Location', value: answer.location },
     { key: 'purpose', label: 'Purpose', value: purpose },
     { key: 'notes', label: 'Notes', value: notes, append: true },
@@ -484,21 +489,39 @@ async function showFill(id) {
 }
 
 // --- Full-screen photo viewer ---
-// Pinch or double-tap to zoom, drag to move around. A finger held still is
-// left alone, so iOS Live Text can select the writing on the omamori.
+// Swipe sideways for the other side of the omamori. Pinch or double-tap to
+// zoom, drag to move around. A finger held still is left alone, so iOS's
+// press-and-hold menu for images still works.
 const Viewer = (() => {
   const el = document.getElementById('viewer');
   const stage = el.querySelector('.viewer-stage');
   const img = stage.querySelector('img');
+  const label = el.querySelector('.viewer-label');
+  const hint = el.querySelector('.viewer-hint');
   const MAX_SCALE = 6;
   const HOLD_MS = 350;      // held this long before moving = press-and-hold, not a drag
+  const SWIPE_PX = 60;      // how far a swipe must go to change photo
   const pointers = new Map();
+  let photos = [];          // [{ src, label }]
+  let index = 0;
   let scale = 1, x = 0, y = 0;
+  let swipeX = 0;           // how far the current swipe has moved the photo
   let pinch = null;
   let lastTap = 0;
 
   function apply() {
-    img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+    img.style.transform = `translate(${x + swipeX}px, ${y}px) scale(${scale})`;
+  }
+
+  function show(i) {
+    index = (i + photos.length) % photos.length;
+    scale = 1; x = 0; y = 0; swipeX = 0;
+    img.classList.remove('animate');
+    apply();
+    img.src = photos[index].src;
+    label.textContent = `${photos[index].label} · ${index + 1} of ${photos.length}`;
+    label.hidden = photos.length < 2;
+    hint.textContent = (photos.length > 1 ? 'Swipe for the other side · ' : '') + 'Pinch or double-tap to zoom';
   }
 
   // Don't let the photo be dragged off screen.
@@ -533,6 +556,7 @@ const Viewer = (() => {
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, time: Date.now(), moved: false });
     if (pointers.size === 2) {
       pointers.forEach(p => { p.moved = true; });
+      swipeX = 0;
       pinch = { ...twoFingers(), scale, x, y };
     }
   });
@@ -565,6 +589,9 @@ const Viewer = (() => {
       y += dy;
       clamp();
       apply();
+    } else if (photos.length > 1) {
+      swipeX = p.x - p.startX; // the photo follows the finger
+      apply();
     }
   });
 
@@ -572,6 +599,19 @@ const Viewer = (() => {
     const p = pointers.get(e.pointerId);
     pointers.delete(e.pointerId);
     if (pointers.size < 2) pinch = null;
+
+    // End of a swipe: change photo if it went far enough sideways, otherwise slide back.
+    if (swipeX && !pointers.size) {
+      const sideways = p && Math.abs(swipeX) > Math.abs(p.y - p.startY);
+      if (e.type === 'pointerup' && sideways && Math.abs(swipeX) > SWIPE_PX) {
+        show(index + (swipeX < 0 ? 1 : -1));
+      } else {
+        swipeX = 0;
+        img.classList.add('animate');
+        apply();
+      }
+      return;
+    }
 
     // Double tap: zoom in on that spot, or back out.
     if (e.type !== 'pointerup' || !p || p.moved || pointers.size || Date.now() - p.time > 300) return;
@@ -602,13 +642,12 @@ const Viewer = (() => {
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !el.hidden) close(); });
 
   return {
-    open(src) {
+    // list: [{ src, label }]; start: which one to show first
+    open(list, start = 0) {
+      photos = list;
       pointers.clear();
       pinch = null;
-      scale = 1; x = 0; y = 0;
-      img.classList.remove('animate');
-      apply();
-      img.src = src;
+      show(start);
       el.hidden = false;
     },
   };
@@ -668,8 +707,8 @@ async function showForm(id) {
           </div>`).join('')}
       </div>
 
-      ${textField('nameJa', 'Shrine name (Japanese)', { placeholder: '例: 伏見稲荷大社' })}
-      ${textField('nameEn', 'Shrine name (English / romanised)', { placeholder: 'e.g. Fushimi Inari Taisha' })}
+      ${textField('nameJa', 'Shrine or temple name (Japanese)', { placeholder: '例: 伏見稲荷大社' })}
+      ${textField('nameEn', 'Shrine or temple name (English / romanised)', { placeholder: 'e.g. Fushimi Inari Taisha' })}
       ${textField('location', 'Location', { placeholder: 'e.g. Fushimi-ku, Kyoto' })}
 
       <div class="field">
@@ -776,7 +815,14 @@ async function showForm(id) {
       showPhoto();
     });
 
-    viewBtn.addEventListener('click', () => Viewer.open(img.src));
+    viewBtn.addEventListener('click', () => {
+      const shown = ['front', 'back'].filter(s => photos[s].blob).map(s => ({
+        side: s,
+        src: form.querySelector(`.picker[data-side=${s}] img`).src,
+        label: s === 'front' ? 'Front' : 'Back',
+      }));
+      Viewer.open(shown, shown.findIndex(p => p.side === side));
+    });
 
     removeBtn.addEventListener('click', () => {
       state.blob = null;
@@ -809,7 +855,7 @@ async function showForm(id) {
       notes: field('notes').value.trim(),
     };
     if (!data.nameJa && !data.nameEn && !photos.front.blob && !photos.back.blob) {
-      alert('Please add at least a shrine name or a photo.');
+      alert('Please add at least a shrine or temple name, or a photo.');
       return;
     }
 
