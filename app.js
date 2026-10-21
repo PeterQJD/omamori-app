@@ -238,8 +238,11 @@ async function showDetail(id) {
     `<a class="hbtn strong" href="#/edit/${esc(id)}">Edit</a>`);
 
   const figure = (photo, label) => photo
-    ? `<figure class="photo"><img src="${storedUrl(photo)}" alt="${label}"><figcaption>${label}</figcaption></figure>`
-    : `<figure class="photo empty"><span>No ${label.toLowerCase()} photo</span></figure>`;
+    ? `<div>
+        <figure class="photo"><img src="${storedUrl(photo)}" alt="${label}"><figcaption>${label}</figcaption></figure>
+        <button type="button" class="mini save-photo" data-side="${label.toLowerCase()}">Save ${label.toLowerCase()} photo</button>
+      </div>`
+    : `<div><figure class="photo empty"><span>No ${label.toLowerCase()} photo</span></figure></div>`;
 
   const rows = [
     ['Location', rec.location],
@@ -258,6 +261,14 @@ async function showDetail(id) {
     <button type="button" class="button danger" id="delete">Delete this omamori</button>`;
 
   view.querySelectorAll('.photo img').forEach(img => img.addEventListener('click', () => openViewer(img.src)));
+
+  // Opens the Share sheet, where "Save Image" puts the photo in the Photos library.
+  const photos = { front, back };
+  view.querySelectorAll('.save-photo').forEach(btn => btn.addEventListener('click', () => {
+    const side = btn.dataset.side;
+    const name = (rec.nameEn || rec.nameJa || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'omamori';
+    shareFile(new File([photos[side].data], `${name} ${side}.jpg`, { type: photos[side].type }));
+  }));
 
   document.getElementById('delete').addEventListener('click', async () => {
     if (!confirm(`Delete “${displayName(rec)}”?\n\nThis can’t be undone (unless you have a backup).`)) return;
@@ -540,6 +551,21 @@ function downloadFile(file) {
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 
+// Opens the Share sheet for a file, or downloads it where sharing isn't available.
+// Resolves true once shared or downloaded, false if the Share sheet was cancelled.
+async function shareFile(file) {
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file] });
+      return true;
+    } catch (err) {
+      if (err.name === 'AbortError') return false;
+    }
+  }
+  downloadFile(file);
+  return true;
+}
+
 async function showBackup() {
   const myRoute = routeId;
   setHeader('Backup', '<a class="hbtn" href="#/">‹ All</a>');
@@ -601,17 +627,9 @@ async function showBackup() {
   });
 
   document.getElementById('share').addEventListener('click', async () => {
-    if (navigator.canShare?.({ files: [backupFile] })) {
-      try {
-        await navigator.share({ files: [backupFile] });
-        setLastBackup();
-        toast('Backup saved');
-      } catch (err) {
-        if (err.name !== 'AbortError') { downloadFile(backupFile); setLastBackup(); }
-      }
-    } else {
-      downloadFile(backupFile);
+    if (await shareFile(backupFile)) {
       setLastBackup();
+      toast('Backup saved');
     }
   });
 
