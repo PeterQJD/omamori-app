@@ -279,15 +279,22 @@ main {
 }
 
 .linkbtn {
-  display: block;
-  margin: 6px auto 0;
-  min-height: 32px;
+  min-height: 36px;
+  padding: 0 6px;
   border: 0;
   background: none;
-  color: var(--danger);
+  color: var(--accent);
   font: inherit;
-  font-size: 14px;
+  font-size: 15px;
   cursor: pointer;
+}
+.linkbtn.danger { color: var(--danger); }
+
+.picker-actions {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 4px;
 }
 
 /* ---------- Form ---------- */
@@ -392,16 +399,50 @@ input:focus, select:focus, textarea:focus {
   position: fixed;
   inset: 0;
   z-index: 50;
+  background: #000;
+}
+.viewer-stage {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  touch-action: none; /* we handle pinch and drag ourselves */
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-  background: #000;
 }
-.viewer img {
+.viewer-stage img {
   max-width: 100%;
   max-height: 100%;
-  object-fit: contain;
+  transform-origin: center;
+  will-change: transform;
+}
+.viewer-stage img.animate { transition: transform 0.2s ease-out; }
+.viewer-close {
+  position: absolute;
+  top: calc(env(safe-area-inset-top) + 10px);
+  right: calc(env(safe-area-inset-right) + 12px);
+  min-height: 40px;
+  padding: 8px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(60, 60, 60, 0.75);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.viewer-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(env(safe-area-inset-bottom) + 10px);
+  margin: 0;
+  padding: 0 16px;
+  text-align: center;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  pointer-events: none;
 }
 
 .toast {

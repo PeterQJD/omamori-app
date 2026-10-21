@@ -260,7 +260,7 @@ async function showDetail(id) {
     </div>
     <button type="button" class="button danger" id="delete">Delete this omamori</button>`;
 
-  view.querySelectorAll('.photo img').forEach(img => img.addEventListener('click', () => openViewer(img.src)));
+  view.querySelectorAll('.photo img').forEach(img => img.addEventListener('click', () => Viewer.open(img.src)));
 
   // Opens the Share sheet, where "Save Image" puts the photo in the Photos library.
   const photos = { front, back };
@@ -278,13 +278,136 @@ async function showDetail(id) {
   });
 }
 
-function openViewer(src) {
-  const viewer = document.getElementById('viewer');
-  viewer.querySelector('img').src = src;
-  viewer.hidden = false;
-}
+// --- Full-screen photo viewer ---
+// Pinch or double-tap to zoom, drag to move around. A finger held still is
+// left alone, so iOS Live Text can select the writing on the omamori.
+const Viewer = (() => {
+  const el = document.getElementById('viewer');
+  const stage = el.querySelector('.viewer-stage');
+  const img = stage.querySelector('img');
+  const MAX_SCALE = 6;
+  const HOLD_MS = 350;      // held this long before moving = press-and-hold, not a drag
+  const pointers = new Map();
+  let scale = 1, x = 0, y = 0;
+  let pinch = null;
+  let lastTap = 0;
 
-document.getElementById('viewer').addEventListener('click', e => { e.currentTarget.hidden = true; });
+  function apply() {
+    img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
+  }
+
+  // Don't let the photo be dragged off screen.
+  function clamp() {
+    if (scale <= 1) { scale = 1; x = 0; y = 0; return; }
+    const maxX = Math.max(0, (img.offsetWidth * scale - stage.clientWidth) / 2);
+    const maxY = Math.max(0, (img.offsetHeight * scale - stage.clientHeight) / 2);
+    x = Math.min(maxX, Math.max(-maxX, x));
+    y = Math.min(maxY, Math.max(-maxY, y));
+  }
+
+  // Position of a screen point relative to the middle of the viewer.
+  function fromCentre(px, py) {
+    const r = stage.getBoundingClientRect();
+    return [px - (r.left + r.width / 2), py - (r.top + r.height / 2)];
+  }
+
+  // Zoom to newScale while keeping the point (fx, fy) in the same place.
+  function zoomAround(fx, fy, fromScale, fromX, fromY, newScale) {
+    x = fx - (fx - fromX) * (newScale / fromScale);
+    y = fy - (fy - fromY) * (newScale / fromScale);
+    scale = newScale;
+  }
+
+  function twoFingers() {
+    const [a, b] = [...pointers.values()];
+    return { dist: Math.hypot(a.x - b.x, a.y - b.y) || 1, midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2 };
+  }
+
+  stage.addEventListener('pointerdown', e => {
+    img.classList.remove('animate');
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, time: Date.now(), moved: false });
+    if (pointers.size === 2) {
+      pointers.forEach(p => { p.moved = true; });
+      pinch = { ...twoFingers(), scale, x, y };
+    }
+  });
+
+  stage.addEventListener('pointermove', e => {
+    const p = pointers.get(e.pointerId);
+    if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX;
+    p.y = e.clientY;
+
+    if (pinch && pointers.size === 2) {
+      const now = twoFingers();
+      const [fx, fy] = fromCentre(pinch.midX, pinch.midY);
+      zoomAround(fx, fy, pinch.scale, pinch.x, pinch.y, Math.min(MAX_SCALE, Math.max(1, pinch.scale * now.dist / pinch.dist)));
+      x += now.midX - pinch.midX;
+      y += now.midY - pinch.midY;
+      clamp();
+      apply();
+      return;
+    }
+
+    if (!p.moved) {
+      if (Math.hypot(p.x - p.startX, p.y - p.startY) < 8) return;
+      if (Date.now() - p.time > HOLD_MS) { pointers.delete(e.pointerId); return; } // selecting text
+      p.moved = true;
+    }
+    if (scale > 1) {
+      x += dx;
+      y += dy;
+      clamp();
+      apply();
+    }
+  });
+
+  function release(e) {
+    const p = pointers.get(e.pointerId);
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch = null;
+
+    // Double tap: zoom in on that spot, or back out.
+    if (e.type !== 'pointerup' || !p || p.moved || pointers.size || Date.now() - p.time > 300) return;
+    const now = Date.now();
+    if (now - lastTap > 300) { lastTap = now; return; }
+    lastTap = 0;
+    img.classList.add('animate');
+    if (scale > 1) {
+      scale = 1;
+    } else {
+      const [fx, fy] = fromCentre(e.clientX, e.clientY);
+      zoomAround(fx, fy, 1, 0, 0, 2.5);
+    }
+    clamp();
+    apply();
+  }
+  stage.addEventListener('pointerup', release);
+  stage.addEventListener('pointercancel', release);
+
+  // Stops iPhone Safari zooming the whole page instead of the photo.
+  stage.addEventListener('gesturestart', e => e.preventDefault());
+
+  function close() {
+    el.hidden = true;
+    img.removeAttribute('src');
+  }
+  el.querySelector('.viewer-close').addEventListener('click', close);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && !el.hidden) close(); });
+
+  return {
+    open(src) {
+      pointers.clear();
+      pinch = null;
+      scale = 1; x = 0; y = 0;
+      img.classList.remove('animate');
+      apply();
+      img.src = src;
+      el.hidden = false;
+    },
+  };
+})();
 
 // --- Add / edit form ---
 
@@ -333,7 +456,10 @@ async function showForm(id) {
               <span class="picker-hint">+ ${side === 'front' ? 'Front' : 'Back'} photo</span>
               <input type="file" accept="image/*" class="visually-hidden">
             </label>
-            <button type="button" class="linkbtn" data-remove hidden>Remove ${side} photo</button>
+            <div class="picker-actions">
+              <button type="button" class="linkbtn" data-view hidden aria-label="View ${side} photo full screen">View</button>
+              <button type="button" class="linkbtn danger" data-remove hidden aria-label="Remove ${side} photo">Remove</button>
+            </div>
           </div>`).join('')}
       </div>
 
@@ -418,12 +544,14 @@ async function showForm(id) {
     const hint = picker.querySelector('.picker-hint');
     const input = picker.querySelector('input[type=file]');
     const removeBtn = picker.querySelector('[data-remove]');
+    const viewBtn = picker.querySelector('[data-view]');
     const defaultHint = hint.textContent;
 
     const showPhoto = () => {
       img.hidden = !state.blob;
       hint.hidden = Boolean(state.blob);
       removeBtn.hidden = !state.blob;
+      viewBtn.hidden = !state.blob;
       if (state.blob) img.src = blobUrl(state.blob);
     };
 
@@ -442,6 +570,8 @@ async function showForm(id) {
       hint.textContent = defaultHint;
       showPhoto();
     });
+
+    viewBtn.addEventListener('click', () => Viewer.open(img.src));
 
     removeBtn.addEventListener('click', () => {
       state.blob = null;

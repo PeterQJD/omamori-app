@@ -23,7 +23,11 @@
 
   <main id="view"></main>
 
-  <div id="viewer" class="viewer" hidden><img alt=""></div>
+  <div id="viewer" class="viewer" hidden>
+    <div class="viewer-stage"><img alt=""></div>
+    <button type="button" class="viewer-close">Close</button>
+    <p class="viewer-hint">Pinch or double-tap to zoom · Press and hold on writing to copy it</p>
+  </div>
   <div id="toast" class="toast" role="status" hidden></div>
 
   <script src="version.js"></script>
