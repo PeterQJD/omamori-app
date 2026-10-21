@@ -382,6 +382,46 @@ input:focus, select:focus, textarea:focus {
 
 .form .button.primary { margin-top: 28px; }
 
+/* ---------- Fill in from Claude's answer ---------- */
+
+.fill-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.fill-row input {
+  width: 22px;
+  height: 22px;
+  margin: 2px 0 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.fill-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.fill-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.fill-old {
+  font-size: 14px;
+  color: var(--muted);
+}
+.fill-new {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- Backup ---------- */
 
 .panel {

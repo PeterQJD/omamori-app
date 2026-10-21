@@ -9,6 +9,9 @@ const PURPOSES = [
   ['恋愛成就', 'Success in love'],
   ['家内安全', 'Safety of the household'],
   ['健康祈願', 'Good health'],
+  ['健康長寿', 'Good health and long life'],
+  ['無病息災', 'Freedom from illness and misfortune'],
+  ['身体健全', 'Sound body and health'],
   ['病気平癒', 'Recovery from illness'],
   ['厄除け', 'Warding off misfortune'],
   ['八方除け', 'Protection from all directions'],
@@ -44,6 +47,7 @@ let routeId = 0;        // goes up on every screen change, so slow screens can t
 let objectUrls = [];    // photo URLs for the current screen, released when leaving it
 let formDirty = false;  // true while the add/edit form has unsaved changes
 let listSearch = '';    // remembered so the search survives opening an entry and coming back
+let pendingAnswer = ''; // Claude's reply read from the clipboard, waiting for the fill screen
 
 // ---------- Small helpers ----------
 
@@ -170,6 +174,7 @@ async function route() {
     if (page === 'add') await showForm(null);
     else if (page === 'edit') await showForm(param);
     else if (page === 'item') await showDetail(param);
+    else if (page === 'fill') await showFill(param);
     else if (page === 'backup') await showBackup();
     else await showList();
   } catch (err) {
@@ -281,7 +286,9 @@ async function showDetail(id) {
     ${front || back ? `
       <button type="button" class="button" id="ask-claude">Ask Claude about this omamori</button>
       <p class="muted help">Copies a question and opens the Share sheet with the photos.
-        Choose <strong>Claude</strong>, paste the question into the message, and send.</p>` : ''}
+        Choose <strong>Claude</strong>, paste the question into the message, and send.</p>
+      <button type="button" class="button" id="fill-claude">Fill in from Claude’s answer</button>
+      <p class="muted help">In the Claude app, press and hold the reply and tap <strong>Copy</strong>, then come back and tap this.</p>` : ''}
     <button type="button" class="button danger" id="delete">Delete this omamori</button>`;
 
   view.querySelectorAll('.photo img').forEach(img => img.addEventListener('click', () => Viewer.open(img.src)));
@@ -307,12 +314,173 @@ async function showDetail(id) {
     });
   });
 
+  document.getElementById('fill-claude')?.addEventListener('click', async () => {
+    // Read the clipboard now, while it still counts as a tap; the fill screen picks it up.
+    try {
+      pendingAnswer = await navigator.clipboard.readText();
+    } catch {
+      pendingAnswer = '';
+    }
+    location.hash = '#/fill/' + id;
+  });
+
   document.getElementById('delete').addEventListener('click', async () => {
     if (!confirm(`Delete “${displayName(rec)}”?\n\nThis can’t be undone (unless you have a backup).`)) return;
     await DB.remove(id);
     toast('Deleted');
     location.replace('#/');
   });
+}
+
+// --- Fill in from Claude's answer ---
+
+// The labels in Claude's reply (see CLAUDE_QUESTION), lower-case letters only.
+const ANSWER_FIELDS = {
+  shrinejapanese: 'nameJa',
+  shrineenglish: 'nameEn',
+  location: 'location',
+  purposejapanese: 'purposeJa',
+  purposeenglish: 'purposeEn',
+  design: 'design',
+  notes: 'notes',
+};
+
+// Reads the "Label: value" lines from Claude's reply. A value can carry on
+// over the following lines, up to a blank line or the next label.
+function parseClaudeAnswer(text) {
+  const found = {};
+  let current = null;
+  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = raw.replace(/\*\*|__/g, '').trim();
+    const match = /^[-*•#>\s]*([A-Za-z][A-Za-z ()]*?)\s*[:：]\s*(.*)$/.exec(line);
+    const key = match && ANSWER_FIELDS[match[1].toLowerCase().replace(/[^a-z]/g, '')];
+    if (key) {
+      found[key] = match[2].trim();
+      current = key;
+    } else if (!line) {
+      current = null;
+    } else if (current) {
+      found[current] = (found[current] + ' ' + line).trim();
+    }
+  }
+  return found;
+}
+
+// The changes Claude's answer would make to a record, leaving out anything already there.
+function suggestionsFrom(answer, rec) {
+  const purposeJa = answer.purposeJa || '';
+  const purpose = PURPOSES.some(([ja]) => ja === purposeJa)
+    ? purposeJa
+    : [purposeJa, answer.purposeEn].filter(Boolean).join(' · ');
+  const notes = [answer.design && 'Design: ' + answer.design, answer.notes].filter(Boolean).join('\n\n');
+
+  return [
+    { key: 'nameJa', label: 'Shrine name (Japanese)', value: answer.nameJa },
+    { key: 'nameEn', label: 'Shrine name (English)', value: answer.nameEn },
+    { key: 'location', label: 'Location', value: answer.location },
+    { key: 'purpose', label: 'Purpose', value: purpose },
+    { key: 'notes', label: 'Notes', value: notes, append: true },
+  ].filter(s => s.value && s.value !== (rec[s.key] || '') && !(s.append && (rec.notes || '').includes(s.value)));
+}
+
+async function showFill(id) {
+  const myRoute = routeId;
+  const rec = await DB.getRecord(id);
+  if (myRoute !== routeId) return;
+  if (!rec) return showNotFound();
+
+  setHeader('Claude’s answer',
+    '<button type="button" class="hbtn" id="cancel">Cancel</button>',
+    '<button type="button" class="hbtn strong" id="apply-top">Apply</button>');
+
+  view.innerHTML = `
+    <div class="field">
+      <div class="label-row">
+        <label for="answer">Claude’s answer</label>
+        <span class="tools"><button type="button" class="mini" id="paste-answer">Paste</button></span>
+      </div>
+      <textarea id="answer" rows="4" lang="ja" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+    </div>
+    <div id="review"></div>
+    <button type="button" class="button primary" id="apply">Apply</button>`;
+
+  const answerBox = document.getElementById('answer');
+  const review = document.getElementById('review');
+  const applyBtn = document.getElementById('apply');
+  let suggestions = [];
+
+  answerBox.value = pendingAnswer;
+  pendingAnswer = '';
+
+  function updateApply() {
+    const count = review.querySelectorAll('input:checked').length;
+    applyBtn.disabled = !count;
+    applyBtn.textContent = count ? `Apply ${count} change${count > 1 ? 's' : ''}` : 'Apply';
+  }
+
+  function render() {
+    const answer = parseClaudeAnswer(answerBox.value);
+    suggestions = suggestionsFrom(answer, rec);
+
+    if (!answerBox.value.trim()) {
+      review.innerHTML = '<p class="muted help">In the Claude app, press and hold the reply, tap <strong>Copy</strong>, then tap <strong>Paste</strong> above.</p>';
+    } else if (Object.keys(answer).length < 2) {
+      review.innerHTML = '<p class="muted help">This doesn’t look like a reply to the Ask Claude question. Check you copied Claude’s whole reply.</p>';
+    } else if (!suggestions.length) {
+      review.innerHTML = '<p class="muted help">Nothing new: this omamori already has everything in the answer.</p>';
+    } else {
+      review.innerHTML = `
+        <p class="muted help">Tick the changes you want. Fields you’ve already filled in start unticked.</p>
+        ${suggestions.map(s => `
+          <label class="fill-row">
+            <input type="checkbox" data-key="${s.key}" ${s.append || !rec[s.key] ? 'checked' : ''}>
+            <span class="fill-text">
+              <span class="fill-label">${s.label}</span>
+              <span class="fill-old" lang="ja">${s.append
+                ? (rec.notes ? 'Added after your notes' : 'Now: empty')
+                : `Now: ${rec[s.key] ? esc(s.key === 'purpose' ? purposeLabel(rec.purpose) : rec[s.key]) : 'empty'}`}</span>
+              <span class="fill-new" lang="ja">${esc(s.key === 'purpose' ? purposeLabel(s.value) : s.value)}</span>
+            </span>
+          </label>`).join('')}`;
+    }
+    updateApply();
+  }
+
+  answerBox.addEventListener('input', render);
+  review.addEventListener('change', updateApply);
+
+  document.getElementById('paste-answer').addEventListener('click', async () => {
+    try {
+      answerBox.value = await navigator.clipboard.readText();
+      render();
+    } catch {
+      alert('Could not paste. Tap and hold inside the box, then choose Paste.');
+    }
+  });
+
+  document.getElementById('cancel').addEventListener('click', () => location.replace('#/item/' + id));
+  document.getElementById('apply-top').addEventListener('click', () => applyBtn.click());
+
+  applyBtn.addEventListener('click', async () => {
+    const chosen = new Set([...review.querySelectorAll('input:checked')].map(box => box.dataset.key));
+    if (!chosen.size) return;
+    applyBtn.disabled = true;
+    const updated = { ...rec, updatedAt: new Date().toISOString() };
+    for (const s of suggestions) {
+      if (!chosen.has(s.key)) continue;
+      updated[s.key] = s.append && rec.notes ? rec.notes + '\n\n' + s.value : s.value;
+    }
+    try {
+      await DB.save(updated);
+      toast('Updated');
+      location.replace('#/item/' + id);
+    } catch (err) {
+      alert('Could not save: ' + err.message);
+      applyBtn.disabled = false;
+    }
+  });
+
+  render();
 }
 
 // --- Full-screen photo viewer ---
