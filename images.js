@@ -73,14 +73,15 @@ const Images = {
     return { cutout, suggested: brightness / counted / 255 < 0.5 ? 'white' : 'black' };
   },
 
-  // A 3:4 photo of the cut-out, centred on a plain white or black background.
+  // A 3:4 photo of the cut-out, centred on a plain background. "White" is a soft
+  // off-white (the app's own background colour), as pure white looked too stark.
   async compose(cutout, background) {
     const img = await loadImage(cutout);
     const canvas = document.createElement('canvas');
     canvas.width = 1200;
     canvas.height = 1600;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = background === 'black' ? '#000' : '#fff';
+    ctx.fillStyle = background === 'black' ? '#000' : '#f5f1e8';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     const scale = Math.min(0.84 * canvas.width / img.naturalWidth, 0.84 * canvas.height / img.naturalHeight);
     const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
