@@ -790,7 +790,10 @@ async function showForm(id) {
       <div class="field">
         <div class="label-row">
           <label for="place-query">Map pin</label>
-          <span class="tools"><button type="button" class="mini" id="pin-remove" hidden>Remove pin</button></span>
+          <span class="tools">
+            <button type="button" class="mini" id="pin-here">My location</button>
+            <button type="button" class="mini" id="pin-remove" hidden>Remove pin</button>
+          </span>
         </div>
         <div class="place-search">
           <input type="search" id="place-query" placeholder="Name or address (optional)" autocomplete="off" lang="ja">
@@ -913,6 +916,33 @@ async function showForm(id) {
     pin = null;
     formDirty = true;
     showPin(false);
+  });
+
+  // Photos taken from inside the app have no location, so offer where the phone is now.
+  field('pin-here').addEventListener('click', () => {
+    const btn = field('pin-here');
+    if (!navigator.geolocation) {
+      alert('This device can’t share its location.');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = 'Finding…';
+    const done = () => {
+      btn.disabled = false;
+      btn.textContent = 'My location';
+    };
+    navigator.geolocation.getCurrentPosition(pos => {
+      if (myRoute !== routeId) return;
+      done();
+      setPin(pos.coords.latitude, pos.coords.longitude, true);
+      if (pos.coords.accuracy > 200) toast(`Approximate: within about ${Math.round(pos.coords.accuracy)} m`);
+    }, err => {
+      if (myRoute !== routeId) return;
+      done();
+      alert(err.code === err.PERMISSION_DENIED
+        ? 'Omamori isn’t allowed to use your location. To allow it, go to Settings → Privacy & Security → Location Services → Safari Websites, and choose “While Using the App”.'
+        : 'Couldn’t find your location. Try again in a moment, or search instead.');
+    }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
   });
 
   // Searching the map isn't a change to the omamori, and Return searches rather than saving.
