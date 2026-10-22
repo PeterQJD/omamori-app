@@ -753,13 +753,19 @@ async function showForm(id) {
   if (myRoute !== routeId) return;
   if (editing && !rec) return showNotFound();
 
-  // For each side: the current photo (a Blob, or null) and whether it was changed.
-  const photos = { front: { blob: null, changed: false }, back: { blob: null, changed: false } };
+  // For each side: the current photo (a Blob, or null), whether it was changed, and,
+  // if it was made from a cut-out, the cut-out (a Blob) and its background.
+  const photos = {};
+  for (const side of ['front', 'back']) photos[side] = { blob: null, changed: false, cutout: null, background: null };
   if (editing) {
     const [front, back] = await Promise.all([DB.getPhoto(id, 'front'), DB.getPhoto(id, 'back')]);
     if (myRoute !== routeId) return;
-    photos.front.blob = front && Images.toBlob(front);
-    photos.back.blob = back && Images.toBlob(back);
+    for (const [side, stored] of [['front', front], ['back', back]]) {
+      if (!stored) continue;
+      photos[side].blob = Images.toBlob(stored);
+      photos[side].cutout = stored.cutout && Images.toBlob(stored.cutout);
+      photos[side].background = stored.background;
+    }
   }
 
   setHeader(editing ? 'Edit' : 'New omamori',
@@ -780,8 +786,17 @@ async function showForm(id) {
               <button type="button" class="linkbtn" data-view hidden aria-label="View ${side} photo full screen">View</button>
               <button type="button" class="linkbtn danger" data-remove hidden aria-label="Remove ${side} photo">Remove</button>
             </div>
+            <div class="cutout-tools">
+              <button type="button" class="mini" data-paste-cutout aria-label="Paste cut-out as ${side} photo">Paste cut-out</button>
+              <div class="bg-choice" data-bg hidden>
+                <button type="button" class="mini" data-bg-value="white">White</button>
+                <button type="button" class="mini" data-bg-value="black">Black</button>
+              </div>
+            </div>
           </div>`).join('')}
       </div>
+      <p class="muted help">For a plain background: in Photos, touch and hold the omamori until it lifts out,
+        tap <strong>Copy</strong>, then tap <strong>Paste cut-out</strong>.</p>
 
       ${textField('nameJa', 'Shrine or temple name (Japanese)', { placeholder: '例: 伏見稲荷大社' })}
       ${textField('nameEn', 'Shrine or temple name (English / romanised)', { placeholder: 'e.g. Fushimi Inari Taisha' })}
@@ -1008,6 +1023,7 @@ async function showForm(id) {
     const input = picker.querySelector('input[type=file]');
     const removeBtn = picker.querySelector('[data-remove]');
     const viewBtn = picker.querySelector('[data-view]');
+    const bgChoice = picker.querySelector('[data-bg]');
     const defaultHint = hint.textContent;
 
     const showPhoto = () => {
@@ -1015,8 +1031,55 @@ async function showForm(id) {
       hint.hidden = Boolean(state.blob);
       removeBtn.hidden = !state.blob;
       viewBtn.hidden = !state.blob;
+      bgChoice.hidden = !state.cutout;
+      bgChoice.querySelectorAll('button').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.bgValue === state.background);
+      });
       if (state.blob) img.src = blobUrl(state.blob);
     };
+
+    // A cut-out copied from the Photos app, placed on a plain background.
+    picker.querySelector('[data-paste-cutout]').addEventListener('click', async () => {
+      let pasted = null;
+      try {
+        for (const item of await navigator.clipboard.read()) {
+          const type = item.types.find(t => t.startsWith('image/'));
+          if (type) { pasted = await item.getType(type); break; }
+        }
+      } catch {
+        // nothing usable on the clipboard
+      }
+      if (!pasted) {
+        alert('There’s no picture to paste. In Photos, touch and hold the omamori until it lifts out, tap Copy, then come back and tap Paste cut-out.');
+        return;
+      }
+      img.hidden = true;
+      hint.hidden = false;
+      hint.textContent = 'Processing…';
+      try {
+        const { cutout, suggested } = await Images.prepareCutout(pasted);
+        state.blob = await Images.compose(cutout, suggested);
+        state.cutout = cutout;
+        state.background = suggested;
+        state.changed = true;
+        formDirty = true;
+      } catch (err) {
+        alert(err.message === 'no-transparency'
+          ? 'That picture isn’t a cut-out (it has no see-through background). In Photos, touch and hold the omamori itself until it lifts out, then tap Copy.'
+          : 'Could not use that picture. Please try again.');
+      }
+      hint.textContent = defaultHint;
+      showPhoto();
+    });
+
+    bgChoice.querySelectorAll('button').forEach(btn => btn.addEventListener('click', async () => {
+      if (btn.dataset.bgValue === state.background) return;
+      state.background = btn.dataset.bgValue;
+      state.blob = await Images.compose(state.cutout, state.background);
+      state.changed = true;
+      formDirty = true;
+      showPhoto();
+    }));
 
     input.addEventListener('change', async () => {
       const file = input.files[0];
@@ -1031,6 +1094,8 @@ async function showForm(id) {
           toast('Map pin set from where the photo was taken');
         }
         state.blob = await Images.compress(file, 1600, 0.82);
+        state.cutout = null;
+        state.background = null;
         state.changed = true;
         formDirty = true;
       } catch {
@@ -1051,6 +1116,8 @@ async function showForm(id) {
 
     removeBtn.addEventListener('click', () => {
       state.blob = null;
+      state.cutout = null;
+      state.background = null;
       state.changed = true;
       formDirty = true;
       showPhoto();
@@ -1102,7 +1169,11 @@ async function showForm(id) {
 
       const photoChanges = {};
       for (const side of ['front', 'back']) {
-        if (photos[side].changed) photoChanges[side] = photos[side].blob ? await Images.toStored(photos[side].blob) : null;
+        const { blob, changed, cutout, background } = photos[side];
+        if (!changed) continue;
+        photoChanges[side] = blob
+          ? { ...(await Images.toStored(blob)), cutout: cutout ? await Images.toStored(cutout) : null, background }
+          : null;
       }
       // The list thumbnail comes from the front photo, or the back if there's no front.
       if (!rec || photos.front.changed || photos.back.changed) {
@@ -1141,6 +1212,10 @@ async function buildBackup() {
       photos: {
         front: front ? await Images.toDataURL(front) : null,
         back: back ? await Images.toDataURL(back) : null,
+      },
+      cutouts: {
+        front: front?.cutout ? { image: await Images.toDataURL(front.cutout), background: front.background } : null,
+        back: back?.cutout ? { image: await Images.toDataURL(back.cutout), background: back.background } : null,
       },
     };
     parts.push((i ? ',' : '') + JSON.stringify(entry));
@@ -1270,12 +1345,14 @@ async function showBackup() {
     let done = 0;
     try {
       for (const entry of entries) {
-        const { photos = {}, thumb, ...record } = entry;
+        const { photos = {}, cutouts = {}, thumb, ...record } = entry;
         record.thumb = thumb ? Images.fromDataURL(thumb) : null;
-        await DB.save(record, {
-          front: photos.front ? Images.fromDataURL(photos.front) : null,
-          back: photos.back ? Images.fromDataURL(photos.back) : null,
-        });
+        const photo = side => {
+          if (!photos[side]) return null;
+          const cut = cutouts[side];
+          return { ...Images.fromDataURL(photos[side]), cutout: cut ? Images.fromDataURL(cut.image) : null, background: cut?.background || null };
+        };
+        await DB.save(record, { front: photo('front'), back: photo('back') });
         done++;
         status.textContent = `Imported ${done} of ${entries.length}…`;
       }

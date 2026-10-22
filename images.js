@@ -20,6 +20,79 @@ const Images = {
     return out;
   },
 
+  // Tidies up a cut-out (an omamori with a see-through background, copied from
+  // the Photos app): trims the empty space, keeps it to a sensible size, and
+  // suggests a background: white for darker omamori, black for lighter ones.
+  async prepareCutout(blob) {
+    const img = await loadImage(blob);
+    // Work at no more than 2000px: iPhone canvases can't hold full-size photos
+    const scale = Math.min(1, 2000 / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, w, h);
+    const px = ctx.getImageData(0, 0, w, h).data;
+
+    let left = w, top = h, right = -1, bottom = -1, seeThrough = 0, brightness = 0, counted = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4, alpha = px[i + 3];
+        if (alpha < 250) seeThrough++;
+        if (alpha > 20) {
+          if (x < left) left = x;
+          if (x > right) right = x;
+          if (y < top) top = y;
+          if (y > bottom) bottom = y;
+        }
+        if (alpha > 128 && (x + y) % 4 === 0) {
+          brightness += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
+          counted++;
+        }
+      }
+    }
+    if (right < 0 || seeThrough < w * h * 0.02) {
+      canvas.width = canvas.height = 0;
+      throw new Error('no-transparency');
+    }
+
+    const cropW = right - left + 1, cropH = bottom - top + 1;
+    const fit = Math.min(1, 1200 / Math.max(cropW, cropH));
+    const out = document.createElement('canvas');
+    out.width = Math.max(1, Math.round(cropW * fit));
+    out.height = Math.max(1, Math.round(cropH * fit));
+    const outCtx = out.getContext('2d');
+    outCtx.imageSmoothingQuality = 'high';
+    outCtx.drawImage(canvas, left, top, cropW, cropH, 0, 0, out.width, out.height);
+    const cutout = await new Promise((resolve, reject) => {
+      out.toBlob(b => (b ? resolve(b) : reject(new Error('Could not process the cut-out'))), 'image/png');
+    });
+    canvas.width = canvas.height = out.width = out.height = 0;
+    return { cutout, suggested: brightness / counted / 255 < 0.5 ? 'white' : 'black' };
+  },
+
+  // A 3:4 photo of the cut-out, centred on a plain white or black background.
+  async compose(cutout, background) {
+    const img = await loadImage(cutout);
+    const canvas = document.createElement('canvas');
+    canvas.width = 1200;
+    canvas.height = 1600;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = background === 'black' ? '#000' : '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const scale = Math.min(0.84 * canvas.width / img.naturalWidth, 0.84 * canvas.height / img.naturalHeight);
+    const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+    const out = await new Promise((resolve, reject) => {
+      canvas.toBlob(b => (b ? resolve(b) : reject(new Error('Could not make the photo'))), 'image/jpeg', 0.85);
+    });
+    canvas.width = canvas.height = 0;
+    return out;
+  },
+
   async toStored(blob) {
     return { type: blob.type || 'image/jpeg', data: await blob.arrayBuffer() };
   },

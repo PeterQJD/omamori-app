@@ -5,6 +5,8 @@
 //   photos  – the full-size (compressed) photos, keyed "<id>:front" / "<id>:back"
 // Images are kept as { type, data: ArrayBuffer } rather than Blobs, because
 // iOS Safari has had bugs where Blobs stored in IndexedDB become unreadable.
+// A photo made from a cut-out also keeps the cut-out ({ type, data }) and its
+// background ('white' or 'black'), so the background can be changed later.
 const DB = (() => {
   let dbPromise = null;
 
@@ -61,11 +63,14 @@ const DB = (() => {
 
     async getPhoto(id, side) {
       const photo = await result((await readStore('photos')).get(photoKey(id, side)));
-      return photo ? { type: photo.type, data: photo.data } : null;
+      return photo
+        ? { type: photo.type, data: photo.data, cutout: photo.cutout || null, background: photo.background || null }
+        : null;
     },
 
     // Saves a record and its photo changes together.
-    // photos.front / photos.back: { type, data } to store, null to delete, or leave out for no change.
+    // photos.front / photos.back: { type, data, cutout?, background? } to store, null to delete,
+    // or leave out for no change.
     async save(record, photos = {}) {
       const db = await open();
       const tx = db.transaction(['records', 'photos'], 'readwrite');
@@ -74,7 +79,15 @@ const DB = (() => {
       for (const side of ['front', 'back']) {
         const photo = photos[side];
         if (photo === null) store.delete(photoKey(record.id, side));
-        else if (photo) store.put({ key: photoKey(record.id, side), type: photo.type, data: photo.data });
+        else if (photo) {
+          store.put({
+            key: photoKey(record.id, side),
+            type: photo.type,
+            data: photo.data,
+            cutout: photo.cutout || null,
+            background: photo.background || null,
+          });
+        }
       }
       return finished(tx);
     },
