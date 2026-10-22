@@ -5,8 +5,9 @@
 //   photos  – the full-size (compressed) photos, keyed "<id>:front" / "<id>:back"
 // Images are kept as { type, data: ArrayBuffer } rather than Blobs, because
 // iOS Safari has had bugs where Blobs stored in IndexedDB become unreadable.
-// A photo made from a cut-out also keeps the cut-out ({ type, data }) and its
-// background ('white' or 'black'), so the background can be changed later.
+// A photo made from a cut-out also keeps the cut-out ({ type, data }), so the
+// photo can be rebuilt, and its background: 'none' for the see-through style
+// (older ones are 'white' or 'black', and get rebuilt; see updateOldCutouts).
 const DB = (() => {
   let dbPromise = null;
 

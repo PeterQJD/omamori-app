@@ -100,6 +100,11 @@ function displayName(rec) {
   return rec.nameJa || rec.nameEn || 'Untitled omamori';
 }
 
+// The small picture for the list. Cut-out photos stay PNG to keep them see-through.
+async function thumbnail(blob, seeThrough) {
+  return Images.toStored(await Images.compress(blob, 400, 0.75, seeThrough ? 'image/png' : 'image/jpeg'));
+}
+
 function hasPin(rec) {
   return rec != null && rec.lat != null && rec.lng != null;
 }
@@ -111,7 +116,7 @@ function placeName(text) {
 
 function photoFile(rec, photo, side) {
   const name = (rec.nameEn || rec.nameJa || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'omamori';
-  return new File([photo.data], `${name} ${side}.jpg`, { type: photo.type });
+  return new File([photo.data], `${name} ${side}.${photo.type === 'image/png' ? 'png' : 'jpg'}`, { type: photo.type });
 }
 
 function formatBytes(bytes) {
@@ -788,10 +793,6 @@ async function showForm(id) {
             </div>
             <div class="cutout-tools">
               <button type="button" class="mini" data-paste-cutout aria-label="Paste cut-out as ${side} photo">Paste cut-out</button>
-              <div class="bg-choice" data-bg hidden>
-                <button type="button" class="mini" data-bg-value="white">White</button>
-                <button type="button" class="mini" data-bg-value="black">Black</button>
-              </div>
             </div>
           </div>`).join('')}
       </div>
@@ -1023,7 +1024,6 @@ async function showForm(id) {
     const input = picker.querySelector('input[type=file]');
     const removeBtn = picker.querySelector('[data-remove]');
     const viewBtn = picker.querySelector('[data-view]');
-    const bgChoice = picker.querySelector('[data-bg]');
     const defaultHint = hint.textContent;
 
     const showPhoto = () => {
@@ -1031,14 +1031,10 @@ async function showForm(id) {
       hint.hidden = Boolean(state.blob);
       removeBtn.hidden = !state.blob;
       viewBtn.hidden = !state.blob;
-      bgChoice.hidden = !state.cutout;
-      bgChoice.querySelectorAll('button').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.bgValue === state.background);
-      });
       if (state.blob) img.src = blobUrl(state.blob);
     };
 
-    // A cut-out copied from the Photos app, placed on a plain background.
+    // A cut-out copied from the Photos app, made into a see-through photo.
     picker.querySelector('[data-paste-cutout]').addEventListener('click', async () => {
       let pasted = null;
       try {
@@ -1057,10 +1053,10 @@ async function showForm(id) {
       hint.hidden = false;
       hint.textContent = 'Processing…';
       try {
-        const { cutout, suggested } = await Images.prepareCutout(pasted);
-        state.blob = await Images.compose(cutout, suggested);
+        const cutout = await Images.prepareCutout(pasted);
+        state.blob = await Images.compose(cutout);
         state.cutout = cutout;
-        state.background = suggested;
+        state.background = 'none';
         state.changed = true;
         formDirty = true;
       } catch (err) {
@@ -1072,14 +1068,6 @@ async function showForm(id) {
       showPhoto();
     });
 
-    bgChoice.querySelectorAll('button').forEach(btn => btn.addEventListener('click', async () => {
-      if (btn.dataset.bgValue === state.background) return;
-      state.background = btn.dataset.bgValue;
-      state.blob = await Images.compose(state.cutout, state.background);
-      state.changed = true;
-      formDirty = true;
-      showPhoto();
-    }));
 
     input.addEventListener('change', async () => {
       const file = input.files[0];
@@ -1177,8 +1165,8 @@ async function showForm(id) {
       }
       // The list thumbnail comes from the front photo, or the back if there's no front.
       if (!rec || photos.front.changed || photos.back.changed) {
-        const source = photos.front.blob || photos.back.blob;
-        record.thumb = source ? await Images.toStored(await Images.compress(source, 400, 0.75)) : null;
+        const source = photos.front.blob ? photos.front : photos.back;
+        record.thumb = source.blob ? await thumbnail(source.blob, Boolean(source.cutout)) : null;
       }
 
       await DB.save(record, photoChanges);
@@ -1356,6 +1344,8 @@ async function showBackup() {
         done++;
         status.textContent = `Imported ${done} of ${entries.length}…`;
       }
+      status.textContent = 'Finishing…';
+      await updateOldCutouts();
       requestPersistence();
       status.textContent = `Done — imported ${done} omamori.`;
     } catch (err) {
@@ -1369,6 +1359,39 @@ async function showBackup() {
 
 window.addEventListener('hashchange', route);
 route();
+
+// Before version 1.10, cut-out photos had a plain grey or charcoal background.
+// Rebuild them see-through from their saved cut-outs (once, then after imports).
+async function updateOldCutouts() {
+  let updated = false;
+  for (const rec of await DB.allRecords()) {
+    const photos = { front: await DB.getPhoto(rec.id, 'front'), back: await DB.getPhoto(rec.id, 'back') };
+    const changes = {};
+    for (const side of ['front', 'back']) {
+      const photo = photos[side];
+      if (!photo?.cutout || photo.background === 'none') continue;
+      const blob = await Images.compose(Images.toBlob(photo.cutout));
+      changes[side] = photos[side] = { ...(await Images.toStored(blob)), cutout: photo.cutout, background: 'none' };
+    }
+    if (!changes.front && !changes.back) continue;
+    const thumbSide = photos.front ? 'front' : 'back';
+    if (changes[thumbSide]) rec.thumb = await thumbnail(Images.toBlob(photos[thumbSide]), true);
+    await DB.save(rec, changes);
+    updated = true;
+  }
+  return updated;
+}
+
+try {
+  if (!localStorage.getItem('cutoutsSeeThrough')) {
+    updateOldCutouts().then(updated => {
+      localStorage.setItem('cutoutsSeeThrough', '1');
+      if (updated && !formDirty) route();
+    }).catch(err => console.error(err));
+  }
+} catch {
+  // storage unavailable: skip; old cut-out photos keep their background
+}
 
 if ('serviceWorker' in navigator) {
   let hadController = Boolean(navigator.serviceWorker.controller);

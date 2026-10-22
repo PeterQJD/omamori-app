@@ -3,8 +3,9 @@
 // Photo helpers: shrinking photos, and converting between the stored form
 // ({ type, data: ArrayBuffer }), Blobs, and text (data URLs, used in backups).
 const Images = {
-  // Resize so the longest side is at most maxSide pixels, and save as JPEG.
-  async compress(blob, maxSide, quality) {
+  // Resize so the longest side is at most maxSide pixels, and save as JPEG
+  // (or PNG, which keeps see-through parts, when type is 'image/png').
+  async compress(blob, maxSide, quality, type = 'image/jpeg') {
     const img = await loadImage(blob);
     const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
     const canvas = document.createElement('canvas');
@@ -14,15 +15,14 @@ const Images = {
     ctx.imageSmoothingQuality = 'high';
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     const out = await new Promise((resolve, reject) => {
-      canvas.toBlob(b => (b ? resolve(b) : reject(new Error('Could not compress photo'))), 'image/jpeg', quality);
+      canvas.toBlob(b => (b ? resolve(b) : reject(new Error('Could not compress photo'))), type, quality);
     });
     canvas.width = canvas.height = 0; // frees the memory straight away on iOS
     return out;
   },
 
   // Tidies up a cut-out (an omamori with a see-through background, copied from
-  // the Photos app): trims the empty space, keeps it to a sensible size, and
-  // suggests a background: white for darker omamori, black for lighter ones.
+  // the Photos app): trims the empty space and keeps it to a sensible size.
   async prepareCutout(blob) {
     const img = await loadImage(blob);
     // Work at no more than 2000px: iPhone canvases can't hold full-size photos
@@ -36,20 +36,16 @@ const Images = {
     ctx.drawImage(img, 0, 0, w, h);
     const px = ctx.getImageData(0, 0, w, h).data;
 
-    let left = w, top = h, right = -1, bottom = -1, seeThrough = 0, brightness = 0, counted = 0;
+    let left = w, top = h, right = -1, bottom = -1, seeThrough = 0;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const i = (y * w + x) * 4, alpha = px[i + 3];
+        const alpha = px[(y * w + x) * 4 + 3];
         if (alpha < 250) seeThrough++;
         if (alpha > 20) {
           if (x < left) left = x;
           if (x > right) right = x;
           if (y < top) top = y;
           if (y > bottom) bottom = y;
-        }
-        if (alpha > 128 && (x + y) % 4 === 0) {
-          brightness += 0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2];
-          counted++;
         }
       }
     }
@@ -70,25 +66,27 @@ const Images = {
       out.toBlob(b => (b ? resolve(b) : reject(new Error('Could not process the cut-out'))), 'image/png');
     });
     canvas.width = canvas.height = out.width = out.height = 0;
-    return { cutout, suggested: brightness / counted / 255 < 0.5 ? 'white' : 'black' };
+    return cutout;
   },
 
-  // A 3:4 photo of the cut-out, centred on a plain background. "White" is a very
-  // light grey and "black" a deep charcoal, as pure white and black looked too stark.
-  async compose(cutout, background) {
+  // A see-through 3:4 photo of the cut-out, centred, with a soft shadow beneath it
+  // so it looks like it's resting on the page. Whatever is behind it in the app
+  // (light or dark) shows through.
+  async compose(cutout) {
     const img = await loadImage(cutout);
     const canvas = document.createElement('canvas');
-    canvas.width = 1200;
-    canvas.height = 1600;
+    canvas.width = 960;
+    canvas.height = 1280;
     const ctx = canvas.getContext('2d');
-    ctx.fillStyle = background === 'black' ? '#262628' : '#efefed';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const scale = Math.min(0.84 * canvas.width / img.naturalWidth, 0.84 * canvas.height / img.naturalHeight);
+    const scale = Math.min(0.8 * canvas.width / img.naturalWidth, 0.8 * canvas.height / img.naturalHeight);
     const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.35)';
+    ctx.shadowBlur = canvas.width * 0.04;
+    ctx.shadowOffsetY = canvas.height * 0.018;
+    ctx.drawImage(img, (canvas.width - w) / 2, (canvas.height - h) / 2 - canvas.height * 0.01, w, h);
     const out = await new Promise((resolve, reject) => {
-      canvas.toBlob(b => (b ? resolve(b) : reject(new Error('Could not make the photo'))), 'image/jpeg', 0.85);
+      canvas.toBlob(b => (b ? resolve(b) : reject(new Error('Could not make the photo'))), 'image/png');
     });
     canvas.width = canvas.height = 0;
     return out;
