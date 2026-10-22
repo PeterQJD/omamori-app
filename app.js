@@ -100,6 +100,15 @@ function displayName(rec) {
   return rec.nameJa || rec.nameEn || 'Untitled omamori';
 }
 
+function hasPin(rec) {
+  return rec != null && rec.lat != null && rec.lng != null;
+}
+
+// A name tidied up for searching the map: without bracketed extras like "(guess)".
+function placeName(text) {
+  return text.replace(/[(（][^)）]*[)）]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 function photoFile(rec, photo, side) {
   const name = (rec.nameEn || rec.nameJa || '').replace(/[\\/:*?"<>|]+/g, '').trim() || 'omamori';
   return new File([photo.data], `${name} ${side}.jpg`, { type: photo.type });
@@ -166,12 +175,15 @@ async function route() {
   const id = ++routeId;
   objectUrls.forEach(url => URL.revokeObjectURL(url));
   objectUrls = [];
+  Maps.removeAll();
   formDirty = false;
   window.scrollTo(0, 0);
 
   const [page, param] = location.hash.replace(/^#\/?/, '').split('/');
+  view.classList.toggle('full', page === 'map');
   try {
     if (page === 'add') await showForm(null);
+    else if (page === 'map') await showMap(param);
     else if (page === 'edit') await showForm(param);
     else if (page === 'item') await showDetail(param);
     else if (page === 'fill') await showFill(param);
@@ -207,7 +219,11 @@ async function showList() {
   const thumbs = new Map(records.filter(r => r.thumb).map(r => [r.id, storedUrl(r.thumb)]));
 
   view.innerHTML = `
-    ${records.length ? `<input type="search" id="search" class="search" placeholder="Search ${records.length} omamori" autocomplete="off" lang="ja">` : ''}
+    ${records.length ? `
+      <div class="list-tools">
+        <input type="search" id="search" class="search" placeholder="Search ${records.length} omamori" autocomplete="off" lang="ja">
+        <a class="button map-button" href="#/map">Map</a>
+      </div>` : ''}
     <div id="grid" class="grid"></div>
     <p class="version">Omamori Collection · version ${esc(APP_VERSION)}</p>`;
 
@@ -283,6 +299,7 @@ async function showDetail(id) {
       ${rec.nameJa && rec.nameEn ? `<p class="subtitle">${esc(rec.nameEn)}</p>` : ''}
       <dl>${rows.map(([label, value]) => `<dt lang="en">${label}</dt><dd>${esc(value)}</dd>`).join('')}</dl>
     </div>
+    ${hasPin(rec) ? '<div id="detail-map" class="mini-map clickable" role="link" aria-label="Show on the map"></div>' : ''}
     ${front || back ? `
       <button type="button" class="button" id="ask-claude">Ask Claude about this omamori</button>
       <p class="muted help">Copies a question and opens the Share sheet with the photos.
@@ -294,6 +311,17 @@ async function showDetail(id) {
   const photoImgs = [...view.querySelectorAll('.photo img')];
   const viewerPhotos = photoImgs.map(img => ({ src: img.src, label: img.alt }));
   photoImgs.forEach((img, i) => img.addEventListener('click', () => Viewer.open(viewerPhotos, i)));
+
+  // Small map of where it's from; tapping it opens the big map there.
+  const detailMap = document.getElementById('detail-map');
+  if (detailMap) {
+    const map = Maps.create(detailMap, { still: true });
+    map.setView([rec.lat, rec.lng], 14);
+    L.marker([rec.lat, rec.lng], { icon: Maps.pinIcon(), interactive: false }).addTo(map);
+    detailMap.addEventListener('click', e => {
+      if (!e.target.closest('a')) location.hash = '#/map/' + id;
+    });
+  }
 
   // Opens the Share sheet, where "Save Image" puts the photo in the Photos library.
   const photos = { front, back };
@@ -332,6 +360,54 @@ async function showDetail(id) {
     toast('Deleted');
     location.replace('#/');
   });
+}
+
+// --- Map of the whole collection ---
+
+async function showMap(focusId) {
+  const myRoute = routeId;
+  setHeader('Map', '<a class="hbtn" href="#/">‹ All</a>');
+
+  const records = await DB.allRecords();
+  if (myRoute !== routeId) return;
+  const placed = records.filter(hasPin);
+
+  view.innerHTML = `
+    <div id="map" class="full-map"></div>
+    ${!navigator.onLine ? '<p class="map-note">You’re offline, so the map can’t load.</p>'
+      : !placed.length ? '<p class="map-note">No omamori have a map pin yet. Open one, tap <strong>Edit</strong>, and use <strong>Find</strong> under Map pin.</p>'
+      : ''}`;
+
+  const map = Maps.create(document.getElementById('map'));
+
+  // One pin per place: omamori from the same shrine or temple share it.
+  const places = new Map();
+  for (const r of placed) {
+    const key = r.lat.toFixed(4) + ',' + r.lng.toFixed(4);
+    if (!places.has(key)) places.set(key, []);
+    places.get(key).push(r);
+  }
+
+  const markers = [...places.values()].map(group => {
+    const marker = L.marker([group[0].lat, group[0].lng], { icon: Maps.pinIcon(group.length) }).addTo(map);
+    marker.bindPopup(() => `<div class="map-popup">${group.map(r => `
+      <a class="map-item" href="#/item/${esc(r.id)}">
+        ${r.thumb ? `<img src="${storedUrl(r.thumb)}" alt="">` : '<span class="map-nophoto" lang="ja">守</span>'}
+        <span lang="ja"><strong>${esc(displayName(r))}</strong>${r.purpose ? `<br><small>${esc(r.purpose)}</small>` : ''}</span>
+      </a>`).join('')}</div>`);
+    marker.ids = group.map(r => r.id);
+    return marker;
+  });
+
+  const focus = markers.find(m => m.ids.includes(focusId));
+  if (focus) {
+    map.setView(focus.getLatLng(), 15);
+    focus.openPopup();
+  } else if (markers.length) {
+    map.fitBounds(L.latLngBounds(markers.map(m => m.getLatLng())).pad(0.2), { maxZoom: 14 });
+  } else {
+    map.setView(Maps.JAPAN.center, Maps.JAPAN.zoom);
+  }
 }
 
 // --- Fill in from Claude's answer ---
@@ -712,6 +788,20 @@ async function showForm(id) {
       ${textField('location', 'Location', { placeholder: 'e.g. Fushimi-ku, Kyoto' })}
 
       <div class="field">
+        <div class="label-row">
+          <label for="place-query">Map pin</label>
+          <span class="tools"><button type="button" class="mini" id="pin-remove" hidden>Remove pin</button></span>
+        </div>
+        <div class="place-search">
+          <input type="search" id="place-query" placeholder="Name or address (optional)" autocomplete="off" lang="ja">
+          <button type="button" class="mini" id="place-find">Find</button>
+        </div>
+        <div id="place-results"></div>
+        <div id="pin-map" class="mini-map"></div>
+        <p class="muted help" id="pin-help"></p>
+      </div>
+
+      <div class="field">
         <div class="label-row"><label for="purposeSelect">Purpose</label></div>
         <select id="purposeSelect">
           <option value="">— Not set —</option>
@@ -780,6 +870,105 @@ async function showForm(id) {
     });
   });
 
+  // Map pin: set by searching, tapping the map, dragging the pin, or from a photo's location
+  let pin = hasPin(rec) ? { lat: rec.lat, lng: rec.lng } : null;
+  let marker = null;
+  const pinMap = Maps.create(field('pin-map'));
+  const results = field('place-results');
+  const placeQuery = field('place-query');
+
+  function showPin(zoomIn) {
+    if (pin && !marker) {
+      marker = L.marker([pin.lat, pin.lng], { icon: Maps.pinIcon(), draggable: true }).addTo(pinMap);
+      marker.on('dragend', () => {
+        const p = marker.getLatLng();
+        pin = { lat: p.lat, lng: p.lng };
+        formDirty = true;
+      });
+    } else if (pin) {
+      marker.setLatLng([pin.lat, pin.lng]);
+    } else if (marker) {
+      marker.remove();
+      marker = null;
+    }
+    if (pin && zoomIn) pinMap.setView([pin.lat, pin.lng], Math.max(pinMap.getZoom(), 15));
+    field('pin-remove').hidden = !pin;
+    field('pin-help').textContent = pin
+      ? 'Drag the pin, or tap the map, to move it.'
+      : 'Tap Find, or tap the map to place the pin yourself.';
+  }
+
+  function setPin(lat, lng, zoomIn) {
+    pin = { lat, lng };
+    formDirty = true;
+    showPin(zoomIn);
+  }
+
+  if (pin) pinMap.setView([pin.lat, pin.lng], 15);
+  else pinMap.setView(Maps.JAPAN.center, Maps.JAPAN.zoom);
+  showPin(false);
+
+  pinMap.on('click', e => setPin(e.latlng.lat, e.latlng.lng, false));
+  field('pin-remove').addEventListener('click', () => {
+    pin = null;
+    formDirty = true;
+    showPin(false);
+  });
+
+  // Searching the map isn't a change to the omamori, and Return searches rather than saving.
+  placeQuery.addEventListener('input', e => e.stopPropagation());
+  placeQuery.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); findPlace(); }
+  });
+  field('place-find').addEventListener('click', findPlace);
+
+  // OpenStreetMap's search is fussy, and many temples share a name. So try the
+  // main word of the name with each part of the Location ("大願寺 Hatsukaichi"),
+  // collect everything found, and let the user pick. Searches Japan first.
+  async function findPlace() {
+    const typed = placeQuery.value.trim();
+    const nameJa = placeName(field('nameJa').value);
+    const nameEn = placeName(field('nameEn').value);
+    const mainName = (nameJa || nameEn).split(' ').pop();
+    const parts = field('location').value.split(/[,、，]/).map(p => p.trim()).filter(Boolean).slice(0, 3);
+    const combined = typed ? [typed] : parts.map(part => `${mainName} ${part}`).filter(() => mainName);
+    const fallbacks = typed ? [] : [...new Set([mainName, nameJa, nameEn, parts.join(', ')].filter(Boolean))];
+    if (!combined.length && !fallbacks.length) {
+      results.innerHTML = '<p class="muted help">Type a name to search for, or fill in the shrine or temple name first.</p>';
+      return;
+    }
+    results.innerHTML = '<p class="muted help">Searching…</p>';
+    try {
+      const found = [];
+      // Results within about 100 m of one already found are the same place
+      const add = list => list.forEach(p => {
+        if (!found.some(f => Math.abs(f.lat - p.lat) < 0.001 && Math.abs(f.lng - p.lng) < 0.001)) found.push(p);
+      });
+      for (const text of combined) add(await Maps.search(text));
+      for (const text of fallbacks) {
+        if (found.length) break;
+        add(await Maps.search(text));
+      }
+      if (!found.length) add(await Maps.search(typed || fallbacks[0], { japan: false }));
+      const places = found.slice(0, 6);
+      if (!places.length) {
+        results.innerHTML = '<p class="muted help">No places found. Try a different name, or tap the map to place the pin yourself.</p>';
+        return;
+      }
+      results.innerHTML = '<p class="muted help">Tap the right place:</p>' + places.map((p, i) => {
+        const [first, ...rest] = p.name.split(', ');
+        return `<button type="button" class="place" data-i="${i}" lang="ja"><strong>${esc(first)}</strong><br><small>${esc(rest.join(', '))}</small></button>`;
+      }).join('');
+      results.querySelectorAll('.place').forEach(btn => btn.addEventListener('click', () => {
+        const p = places[btn.dataset.i];
+        results.innerHTML = '';
+        setPin(p.lat, p.lng, true);
+      }));
+    } catch {
+      results.innerHTML = '<p class="muted help">The search didn’t work. Check you’re online and try again.</p>';
+    }
+  }
+
   // Photo pickers
   form.querySelectorAll('.picker').forEach(picker => {
     const side = picker.dataset.side;
@@ -805,6 +994,12 @@ async function showForm(id) {
       if (!file) return;
       hint.textContent = 'Processing…';
       try {
+        // Photos remember where they were taken; use that for the pin if there isn't one yet.
+        const gps = pin ? null : await Images.readGps(file);
+        if (gps) {
+          setPin(gps.lat, gps.lng, true);
+          toast('Map pin set from where the photo was taken');
+        }
         state.blob = await Images.compress(file, 1600, 0.82);
         state.changed = true;
         formDirty = true;
@@ -869,6 +1064,8 @@ async function showForm(id) {
         ...(rec || {}),
         ...data,
         id: rec ? rec.id : newId(),
+        lat: pin ? Number(pin.lat.toFixed(6)) : null,
+        lng: pin ? Number(pin.lng.toFixed(6)) : null,
         createdAt: rec ? rec.createdAt : now,
         updatedAt: now,
       };
