@@ -170,6 +170,7 @@ main {
 .card:active { opacity: 0.7; }
 
 .thumb {
+  position: relative;
   aspect-ratio: 3 / 4;
   background: var(--surface); /* shows behind see-through cut-out photos */
   display: flex;
@@ -191,6 +192,33 @@ main {
   background: var(--placeholder);
   font-size: 48px;
   color: var(--gold);
+}
+
+/* 納: this omamori has been returned to its shrine or temple */
+.returned-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1.5px solid var(--gold);
+  border-radius: 50%;
+  background: var(--bar);
+  color: var(--gold);
+  font-family: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.photo .returned-badge {
+  width: 36px;
+  height: 36px;
+  font-size: 20px;
 }
 
 .card-body { padding: 8px 10px 10px; }

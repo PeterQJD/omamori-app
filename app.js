@@ -89,6 +89,16 @@ function purposeLabel(purpose) {
   return preset ? `${preset[0]} · ${preset[1]}` : purpose;
 }
 
+// Today as YYYY-MM-DD, in the phone's own time zone.
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Shown on the front photo of an omamori returned to its shrine or temple.
+// 納 (osameru) is what's written where shrines and temples take old omamori back.
+const RETURNED_BADGE = '<span class="returned-badge" lang="ja" role="img" aria-label="Returned">納</span>';
+
 function formatDate(iso) {
   if (!iso) return '';
   const [y, m, d] = iso.split('-').map(Number);
@@ -252,7 +262,7 @@ async function showList() {
     }
     grid.innerHTML = shown.map(r => `
       <a class="card" href="#/item/${esc(r.id)}">
-        <div class="thumb">${thumbs.has(r.id) ? `<img src="${thumbs.get(r.id)}" alt="">` : '<span class="nophoto" lang="ja">守</span>'}</div>
+        <div class="thumb">${thumbs.has(r.id) ? `<img src="${thumbs.get(r.id)}" alt="">` : '<span class="nophoto" lang="ja">守</span>'}${r.returnedAt ? RETURNED_BADGE : ''}</div>
         <div class="card-body" lang="ja">
           <div class="name-ja">${esc(r.nameJa || r.nameEn || 'Untitled')}</div>
           ${r.nameJa && r.nameEn ? `<div class="name-en">${esc(r.nameEn)}</div>` : ''}
@@ -285,7 +295,8 @@ async function showDetail(id) {
 
   const figure = (photo, label) => photo
     ? `<div>
-        <figure class="photo"><img src="${storedUrl(photo)}" alt="${label}"><figcaption>${label}</figcaption></figure>
+        <figure class="photo"><img src="${storedUrl(photo)}" alt="${label}"><figcaption>${label}</figcaption>
+          ${label === 'Front' && rec.returnedAt ? RETURNED_BADGE : ''}</figure>
         <button type="button" class="mini save-photo" data-side="${label.toLowerCase()}">Save ${label.toLowerCase()} photo</button>
       </div>`
     : `<div><figure class="photo empty"><span>No ${label.toLowerCase()} photo</span></figure></div>`;
@@ -294,6 +305,7 @@ async function showDetail(id) {
     ['Location', rec.location],
     ['Purpose', rec.purpose && purposeLabel(rec.purpose)],
     ['Date acquired', formatDate(rec.dateAcquired)],
+    ['Returned to its shrine or temple', formatDate(rec.returnedAt)],
     ['Notes', rec.notes],
   ].filter(([, value]) => value);
 
@@ -311,6 +323,10 @@ async function showDetail(id) {
         Choose <strong>Claude</strong>, paste the question into the message, and send.</p>
       <button type="button" class="button" id="fill-claude">Fill in from Claude’s answer</button>
       <p class="muted help">In the Claude app, press and hold the reply and tap <strong>Copy</strong>, then come back and tap this.</p>` : ''}
+    <button type="button" class="button" id="returned">${rec.returnedAt ? 'Undo “returned”' : 'Mark as returned to its shrine or temple'}</button>
+    <p class="muted help">${rec.returnedAt
+      ? 'Removes the <span lang="ja">納</span> mark and the date returned.'
+      : 'Records today’s date and adds a <span lang="ja">納</span> mark to the front photo. You can change the date with Edit.'}</p>
     <button type="button" class="button danger" id="delete">Delete this omamori</button>`;
 
   const photoImgs = [...view.querySelectorAll('.photo img')];
@@ -357,6 +373,13 @@ async function showDetail(id) {
       pendingAnswer = '';
     }
     location.hash = '#/fill/' + id;
+  });
+
+  document.getElementById('returned').addEventListener('click', async () => {
+    if (rec.returnedAt && !confirm('Mark this omamori as not returned?')) return;
+    await DB.save({ ...rec, returnedAt: rec.returnedAt ? null : todayISO(), updatedAt: new Date().toISOString() });
+    toast(rec.returnedAt ? 'No longer marked as returned' : 'Marked as returned');
+    route();
   });
 
   document.getElementById('delete').addEventListener('click', async () => {
@@ -840,6 +863,14 @@ async function showForm(id) {
         <input type="date" id="dateAcquired">
       </div>
 
+      <div class="field">
+        <div class="label-row">
+          <label for="returnedAt">Date returned to its shrine or temple</label>
+          <span class="tools"><button type="button" class="mini" data-clear="returnedAt">Clear</button></span>
+        </div>
+        <input type="date" id="returnedAt">
+      </div>
+
       ${textField('notes', 'Notes', { multiline: true })}
 
       <button type="submit" class="button primary" id="save">Save</button>
@@ -852,7 +883,7 @@ async function showForm(id) {
 
   // Fill in the existing values
   if (rec) {
-    for (const name of ['nameJa', 'nameEn', 'location', 'dateAcquired', 'notes']) field(name).value = rec[name] || '';
+    for (const name of ['nameJa', 'nameEn', 'location', 'dateAcquired', 'returnedAt', 'notes']) field(name).value = rec[name] || '';
     if (rec.purpose && PURPOSES.some(([ja]) => ja === rec.purpose)) {
       purposeSelect.value = rec.purpose;
     } else if (rec.purpose) {
@@ -1132,6 +1163,7 @@ async function showForm(id) {
       location: field('location').value.trim(),
       purpose: purposeSelect.value === '__other' ? field('purposeOther').value.trim() : purposeSelect.value,
       dateAcquired: field('dateAcquired').value,
+      returnedAt: field('returnedAt').value || null,
       notes: field('notes').value.trim(),
     };
     if (!data.nameJa && !data.nameEn && !photos.front.blob && !photos.back.blob) {
